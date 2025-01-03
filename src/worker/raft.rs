@@ -1,4 +1,6 @@
-use ractor::{Actor, ActorProcessingErr, ActorRef};
+pub(crate) use self::rpc::{AppendEntriesAsk, AppendEntriesReply};
+
+use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 use ractor_cluster::RactorClusterMessage;
 use tracing::info;
 
@@ -7,10 +9,24 @@ use super::Mode;
 pub(crate) struct RaftWorker;
 
 #[derive(RactorClusterMessage)]
-pub(crate) enum RaftMsg {}
+pub(crate) enum RaftMsg {
+    #[rpc]
+    AppendEntries(AppendEntriesAsk, RpcReplyPort<AppendEntriesReply>),
+}
+
+/// Role played by the worker.
+#[derive(Debug)]
+pub(crate) enum RaftRole {
+    Follower,
+    Candidate,
+    Leader,
+}
 
 #[derive(Debug)]
 pub(crate) struct RaftState {
+    /// Role played by the worker.
+    role: RaftRole,
+
     /// Latest term this worker has seen (initialized to 0 on first boot,
     /// increases monotonically).
     ///
@@ -55,8 +71,15 @@ impl Actor for RaftWorker {
     async fn pre_start(
         &self,
         _myself: ActorRef<Self::Msg>,
-        _args: Self::Arguments,
+        args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
+        let mut state = RaftState::default();
+
+        if matches!(args, Mode::Bootstrap) {
+            info!(target: "spawn", "in bootstrap mode, assume leader's role");
+            state.role = RaftRole::Leader;
+        }
+
         Ok(RaftState::default())
     }
 
@@ -73,6 +96,7 @@ impl Actor for RaftWorker {
 impl Default for RaftState {
     fn default() -> Self {
         Self {
+            role: RaftRole::Follower,
             current_term: 0,
             voted_for: None,
             commit_idx: 0,
@@ -81,4 +105,52 @@ impl Default for RaftState {
             match_index: vec![],
         }
     }
+}
+
+mod rpc {
+    use ractor::BytesConvertable;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize)]
+    pub(crate) struct AppendEntriesAsk {
+        /// Leader's term
+        term: u32,
+        /// Leader's pid, so followers can redirect clients
+        leader_id: u32,
+        /// Index of log entry immediately preceding new ones
+        prev_log_index: u64,
+        /// Term of prev_log_index entry
+        prev_log_term: u32,
+        /// Log entries to store (empty for heartbeat; may send more than one for
+        /// efficiency)
+        entries: Vec<()>,
+        /// Leader's commit index
+        leader_commit: usize,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub(crate) struct AppendEntriesReply {
+        /// Current term, for leader to update itself
+        term: u32,
+        /// True if follower contained entry matching prev_log_index and
+        /// prev_log_term
+        success: bool,
+    }
+
+    macro_rules! impl_bytes_convertable_for_serde {
+        ($t:ty) => {
+            impl BytesConvertable for $t {
+                fn into_bytes(self) -> Vec<u8> {
+                    postcard::to_stdvec(&self).expect(stringify!(unable to serialize $t))
+                }
+
+                fn from_bytes(bytes: Vec<u8>) -> Self {
+                    postcard::from_bytes(&bytes).expect(stringify!(unable to deserialize $t))
+                }
+            }
+        };
+    }
+
+    impl_bytes_convertable_for_serde!(AppendEntriesAsk);
+    impl_bytes_convertable_for_serde!(AppendEntriesReply);
 }
