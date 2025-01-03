@@ -1,7 +1,7 @@
 ## Rough Implementation Plan
 
 - [ ] Actor based Raft core
-    - [ ] Supervisor tree
+    - [x] Supervisor tree
     - [ ] Leader election
         - [ ] AppendEntries RPC
         - [ ] RequestVote RPC

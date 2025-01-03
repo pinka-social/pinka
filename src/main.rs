@@ -1,10 +1,24 @@
+mod worker;
+
 use anyhow::Result;
+use ractor::Actor;
 use tokio::signal::unix::{SignalKind, signal};
 use tracing::info;
+
+use crate::worker::{Mode, Supervisor};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
+
+    let mode = if false {
+        Mode::Bootstrap
+    } else {
+        Mode::Restart
+    };
+
+    let (supervisor, actor_handle) =
+        Actor::spawn(Some("supervisor".into()), Supervisor, mode).await?;
 
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
@@ -21,6 +35,9 @@ async fn main() -> Result<()> {
             }
         }
     }
+
+    supervisor.stop(None);
+    actor_handle.await?;
 
     Ok(())
 }
