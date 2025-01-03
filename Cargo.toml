@@ -1,0 +1,13 @@
+[package]
+name = "pinka"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = "0.8.1"
+fjall = "2.4.4"
+ractor = { version = "0.14.2", default-features = false, features = ["message_span_propogation", "tokio_runtime", "cluster"] }
+ractor_cluster = "0.14.2"
+serde_json = "1.0.134"
+tokio = { version = "1.42.0", features = ["process", "rt-multi-thread", "tokio-macros"] }
+toml = "0.8.19"
