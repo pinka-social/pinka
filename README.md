@@ -1,0 +1,28 @@
+## Rough Implementation Plan
+
+- [ ] Actor based Raft core
+    - [ ] Supervisor tree
+    - [ ] Leader election
+        - [ ] AppendEntries RPC
+        - [ ] RequestVote RPC
+    - [ ] Log replication
+    - [ ] Client request forwarding
+    - [ ] Graceful shutdown
+- [ ] Activity Streams data models
+    - [ ] AS Actor
+    - [ ] AS Objects
+        - [ ] Article
+        - [ ] Comment
+        - [ ] Generic object
+    - [ ] Activities
+        - [ ] Create
+        - [ ] Update
+        - [ ] Like
+        - [ ] Follow
+- [ ] Command line tool to ingest activities
+- [ ] Policy modules
+    - [ ] Follow / unfollow
+    - [ ] Moderation
+    - [ ] Spam detection
+- [ ] ActivityPub endpoints
+- [ ] RESTful endpoints for webui
