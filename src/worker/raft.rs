@@ -1,4 +1,6 @@
-pub(crate) use self::rpc::{AppendEntriesAsk, AppendEntriesReply};
+pub(crate) use self::rpc::{
+    AppendEntriesAsk, AppendEntriesReply, RequestVoteAsk, RequestVoteReply,
+};
 
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 use ractor_cluster::RactorClusterMessage;
@@ -12,6 +14,8 @@ pub(crate) struct RaftWorker;
 pub(crate) enum RaftMsg {
     #[rpc]
     AppendEntries(AppendEntriesAsk, RpcReplyPort<AppendEntriesReply>),
+    #[rpc]
+    RequestVote(RequestVoteAsk, RpcReplyPort<RequestVoteReply>),
 }
 
 /// Role played by the worker.
@@ -118,7 +122,7 @@ mod rpc {
         /// Leader's pid, so followers can redirect clients
         leader_id: u32,
         /// Index of log entry immediately preceding new ones
-        prev_log_index: u64,
+        prev_log_index: usize,
         /// Term of prev_log_index entry
         prev_log_term: u32,
         /// Log entries to store (empty for heartbeat; may send more than one for
@@ -137,6 +141,26 @@ mod rpc {
         success: bool,
     }
 
+    #[derive(Serialize, Deserialize)]
+    pub(crate) struct RequestVoteAsk {
+        /// Candidate's term
+        term: u32,
+        /// Candidate's pid requesting vote
+        candidate_id: u32,
+        /// Index of candidate's last log entry
+        last_log_index: usize,
+        /// Term of candidate's last log entry
+        last_log_term: u32,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub(crate) struct RequestVoteReply {
+        /// Current term, for the candidate to update itself
+        term: u32,
+        /// True means candidate received and granted vote
+        vote_granted: bool,
+    }
+
     macro_rules! impl_bytes_convertable_for_serde {
         ($t:ty) => {
             impl BytesConvertable for $t {
@@ -153,4 +177,6 @@ mod rpc {
 
     impl_bytes_convertable_for_serde!(AppendEntriesAsk);
     impl_bytes_convertable_for_serde!(AppendEntriesReply);
+    impl_bytes_convertable_for_serde!(RequestVoteAsk);
+    impl_bytes_convertable_for_serde!(RequestVoteReply);
 }
