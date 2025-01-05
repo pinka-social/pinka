@@ -2,6 +2,8 @@ use ractor::{Actor, ActorProcessingErr, ActorRef, SupervisionEvent};
 use ractor_cluster::RactorMessage;
 use tracing::info;
 
+use crate::config::Config;
+
 use super::{RaftMsg, RaftWorker};
 
 pub(crate) struct Supervisor;
@@ -9,7 +11,9 @@ pub(crate) struct Supervisor;
 #[derive(RactorMessage)]
 pub(crate) enum SupervisorMsg {}
 
-pub(crate) struct SupervisorState {}
+pub(crate) struct SupervisorState {
+    config: Config,
+}
 
 pub(crate) enum Mode {
     Bootstrap,
@@ -20,15 +24,19 @@ pub(crate) enum Mode {
 impl Actor for Supervisor {
     type Msg = SupervisorMsg;
     type State = SupervisorState;
-    type Arguments = Mode;
+    type Arguments = (Mode, Config);
 
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        Actor::spawn_linked(RaftWorker::name(), RaftWorker, args, myself.into()).await?;
-        Ok(SupervisorState {})
+        let config = args.1.clone();
+        // simulate a cluster of size 3
+        Actor::spawn_linked(None, RaftWorker, (Mode::Restart, config), myself.get_cell()).await?;
+        Actor::spawn_linked(None, RaftWorker, (Mode::Restart, config), myself.get_cell()).await?;
+        Actor::spawn_linked(None, RaftWorker, args, myself.get_cell()).await?;
+        Ok(SupervisorState { config })
     }
 
     async fn post_start(
@@ -44,7 +52,7 @@ impl Actor for Supervisor {
         &self,
         myself: ActorRef<Self::Msg>,
         message: SupervisionEvent,
-        _state: &mut Self::State,
+        state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         use SupervisionEvent::*;
 
@@ -58,7 +66,7 @@ impl Actor for Supervisor {
                     Actor::spawn_linked(
                         RaftWorker::name(),
                         RaftWorker,
-                        Mode::Restart,
+                        (Mode::Restart, state.config.clone()),
                         myself.into(),
                     )
                     .await?;
