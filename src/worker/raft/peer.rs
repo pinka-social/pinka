@@ -5,8 +5,8 @@ use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
 use tracing::{info, warn};
 
-use crate::worker::raft::server::RequestVoteAsk;
-use crate::worker::raft::server::rpc::TryAdvanceCommitIndexMsg;
+use crate::worker::raft::RequestVoteAsk;
+use crate::worker::raft::rpc::TryAdvanceCommitIndexMsg;
 
 use super::{AppendEntriesAsk, Config, RaftMsg, RaftRole, RaftShared};
 
