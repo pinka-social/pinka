@@ -58,6 +58,9 @@ struct RaftShared {
 
 #[derive(Debug)]
 pub(crate) struct RaftState {
+    /// Actor reference
+    actor_ref: ActorRef<RaftMsg>,
+
     /// Cluster config
     config: Config,
 
@@ -126,14 +129,11 @@ impl Actor for RaftWorker {
 
     async fn pre_start(
         &self,
-        _myself: ActorRef<Self::Msg>,
+        myself: ActorRef<Self::Msg>,
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         let (mode, config) = args;
-        let mut state = RaftState {
-            config,
-            ..Default::default()
-        };
+        let mut state = RaftState::new(config, myself);
 
         if matches!(mode, Mode::Bootstrap) {
             info!(target: "spawn", "in bootstrap mode, assume leader's role");
@@ -168,7 +168,7 @@ impl Actor for RaftWorker {
                     current_term: state.current_term,
                     commit_index: state.commit_index,
                 },
-                parent_id: myself.get_id().into(),
+                parent: myself.clone(),
                 peer: server.into(),
                 last_log_index: 0,
             };
@@ -177,7 +177,7 @@ impl Actor for RaftWorker {
         }
 
         if !matches!(state.role, RaftRole::Leader) {
-            state.step_down(myself, state.current_term);
+            state.step_down(state.current_term);
         }
 
         Ok(())
@@ -185,7 +185,7 @@ impl Actor for RaftWorker {
 
     async fn handle(
         &self,
-        myself: ActorRef<Self::Msg>,
+        _myself: ActorRef<Self::Msg>,
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
@@ -193,40 +193,31 @@ impl Actor for RaftWorker {
 
         match message {
             RequestVote(request, reply) => {
-                state.handle_request_vote(myself, request, reply);
+                state.handle_request_vote(request, reply);
             }
             AppendEntries(request, reply) => {
-                state.handle_append_entries(myself, request, reply);
+                state.handle_append_entries(request, reply);
             }
             ElectionTimeout => {
-                state.start_new_election(myself);
+                state.start_new_election();
             }
             TryAdvanceCommitIndex(peer_info) => {
-                state.try_advance_commit_index(myself, peer_info);
+                state.try_advance_commit_index(peer_info);
             }
             ReceivedVote(peer_id) => {
-                state.received_vote(myself, peer_id);
+                state.received_vote(peer_id);
             }
         }
 
         Ok(())
     }
-
-    async fn handle_supervisor_evt(
-        &self,
-        myself: ActorRef<Self::Msg>,
-        message: SupervisionEvent,
-        state: &mut Self::State,
-    ) -> Result<(), ActorProcessingErr> {
-        info!("{:?}", message);
-        Ok(())
-    }
 }
 
-impl Default for RaftState {
-    fn default() -> Self {
+impl RaftState {
+    fn new(config: Config, myself: ActorRef<RaftMsg>) -> RaftState {
         Self {
-            config: Default::default(),
+            actor_ref: myself,
+            config,
             role: RaftRole::Follower,
             current_term: 0,
             voted_for: None,
@@ -241,9 +232,7 @@ impl Default for RaftState {
             peers: vec![],
         }
     }
-}
 
-impl RaftState {
     fn min_quorum_match_index(&self) -> usize {
         if self.match_index.is_empty() {
             return 0;
@@ -260,7 +249,9 @@ impl RaftState {
         self.votes.len() >= self.cluster_size / 2 + 1
     }
 
-    fn set_election_timer(&mut self, myself: ActorRef<RaftMsg>) {
+    fn set_election_timer(&mut self) {
+        // TODO simplify timer. move timer to a task and only keep a channel to
+        // update the timer.
         self.unset_election_timer();
 
         let duration = rand::thread_rng()
@@ -268,7 +259,7 @@ impl RaftState {
 
         // info!("will start election in {} ms", duration);
         self.election_abort_handle = Some(
-            myself
+            self.actor_ref
                 .send_after(Duration::from_millis(duration), || RaftMsg::ElectionTimeout)
                 .abort_handle(),
         );
@@ -281,10 +272,11 @@ impl RaftState {
         self.election_abort_handle = None;
     }
 
-    fn start_new_election(&mut self, myself: ActorRef<RaftMsg>) {
+    fn start_new_election(&mut self) {
         if let Some(leader_id) = self.leader_id {
             info!(
                 target: "raft",
+                myself = tracing::field::display(self.actor_ref.get_id()),
                 term = self.current_term + 1,
                 prev_leader_id = tracing::field::display(leader_id),
                 "running for election (unresponsive leader)"
@@ -292,6 +284,7 @@ impl RaftState {
         } else if matches!(self.role, RaftRole::Candidate) {
             info!(
                 target: "raft",
+                myself = tracing::field::display(self.actor_ref.get_id()),
                 term = self.current_term + 1,
                 prev_term = self.current_term,
                 "running for election (previous candidacy timed out)"
@@ -299,6 +292,7 @@ impl RaftState {
         } else {
             info!(
                 target: "raft",
+                myself = tracing::field::display(self.actor_ref.get_id()),
                 term = self.current_term + 1,
                 "running for election"
             );
@@ -306,23 +300,19 @@ impl RaftState {
         self.current_term += 1;
         self.role = RaftRole::Candidate;
         self.leader_id = None;
-        self.voted_for = Some(myself.get_id().into());
+        self.voted_for = Some(self.actor_ref.get_id().into());
         self.votes.clear();
-        self.votes.insert(myself.get_id().into());
-        self.set_election_timer(myself.clone());
-        self.notify_role_change(myself.clone());
+        self.votes.insert(self.actor_ref.get_id().into());
+        self.set_election_timer();
+        self.notify_role_change();
 
         // if we are the only server, this election is already done
         if self.voted_has_quorum() {
-            self.become_leader(myself);
+            self.become_leader();
         }
     }
 
-    fn try_advance_commit_index(
-        &mut self,
-        myself: ActorRef<RaftMsg>,
-        peer_info: TryAdvanceCommitIndexMsg,
-    ) {
+    fn try_advance_commit_index(&mut self, peer_info: TryAdvanceCommitIndexMsg) {
         if !matches!(self.role, RaftRole::Leader) {
             warn!(target: "raft", "try_advance_commit_index called as {:?}", self.role);
             return;
@@ -339,26 +329,25 @@ impl RaftState {
         // TODO
         self.commit_index = new_commit_index;
         trace!(target: "raft", "new commit_index: {}", self.commit_index);
-        self.notify_state_change(myself);
+        self.notify_state_change();
     }
 
     fn handle_request_vote(
         &mut self,
-        myself: ActorRef<RaftMsg>,
         request: RequestVoteAsk,
         reply: RpcReplyPort<RequestVoteReply>,
     ) {
         info!(
             target: "raft",
-            server = tracing::field::display(myself.get_id()),
-            peer = tracing::field::display(request.candidate_id),
+            from = tracing::field::display(request.candidate_id),
+            myself = tracing::field::display(self.actor_ref.get_id()),
             current_term = self.current_term,
             "received request for vote"
         );
         // TODO verify log completeness
         // TODO ignore distrubing request_vote
         if request.term > self.current_term {
-            self.step_down(myself.clone(), request.term);
+            self.step_down(request.term);
         }
         if request.term == self.current_term {
             info!(
@@ -367,8 +356,8 @@ impl RaftState {
                 current_term = self.current_term,
                 "voted"
             );
-            self.step_down(myself.clone(), self.current_term);
-            self.set_election_timer(myself.clone());
+            self.step_down(self.current_term);
+            self.set_election_timer();
             self.voted_for = Some(request.candidate_id);
             // TODO persist votes
         }
@@ -388,7 +377,6 @@ impl RaftState {
 
     fn handle_append_entries(
         &mut self,
-        myself: ActorRef<RaftMsg>,
         request: AppendEntriesAsk,
         reply: RpcReplyPort<AppendEntriesReply>,
     ) {
@@ -402,7 +390,7 @@ impl RaftState {
                 "received stale request from server {} in term {} (this server's term was {}",
                 request.leader_id,
                 request.term,
-                myself.get_id()
+                self.actor_ref.get_id()
             );
             return;
         }
@@ -416,8 +404,8 @@ impl RaftState {
             );
             response.term = request.term;
         }
-        self.step_down(myself.clone(), request.term);
-        self.set_election_timer(myself.clone());
+        self.step_down(request.term);
+        self.set_election_timer();
 
         if self.leader_id.is_none() {
             self.leader_id = Some(request.leader_id);
@@ -429,18 +417,19 @@ impl RaftState {
         // TODO verify log completness
         response.success = true;
 
-        self.set_election_timer(myself);
+        self.set_election_timer();
 
         if let Err(ref err) = reply.send(response) {
             warn!(target: "rpc", error = err as &dyn Error, "send response to append_entries failed");
         }
     }
 
-    fn received_vote(&mut self, myself: ActorRef<RaftMsg>, peer_id: PeerId) {
+    fn received_vote(&mut self, peer_id: PeerId) {
         if !matches!(self.role, RaftRole::Candidate) {
             warn!(
                 target: "raft",
                 peer = tracing::field::display(peer_id),
+                myself = tracing::field::display(self.actor_ref.get_id()),
                 "received vote but not a candidate"
             );
             return;
@@ -448,20 +437,20 @@ impl RaftState {
         self.votes.insert(peer_id);
         if self.voted_has_quorum() {
             info!(target: "raft", "received quorum, becoming leader");
-            self.become_leader(myself);
+            self.become_leader();
         }
     }
 
-    fn become_leader(&mut self, myself: ActorRef<RaftMsg>) {
+    fn become_leader(&mut self) {
         assert!(matches!(self.role, RaftRole::Candidate));
         self.role = RaftRole::Leader;
         self.unset_election_timer();
         self.reset_match_index();
-        self.notify_role_change(myself);
+        self.notify_role_change();
         // TODO append no-op log
     }
 
-    fn step_down(&mut self, myself: ActorRef<RaftMsg>, new_term: u32) {
+    fn step_down(&mut self, new_term: u32) {
         assert!(self.current_term <= new_term);
 
         // let was_leader = matches!(self.role, RaftRole::Leader);
@@ -474,10 +463,10 @@ impl RaftState {
         self.role = RaftRole::Follower;
 
         // if was_leader {
-        self.set_election_timer(myself.clone());
+        self.set_election_timer();
         // }
 
-        self.notify_role_change(myself);
+        self.notify_role_change();
     }
 
     fn reset_match_index(&mut self) {
@@ -486,7 +475,7 @@ impl RaftState {
         }
     }
 
-    fn notify_role_change(&self, myself: ActorRef<RaftMsg>) {
+    fn notify_role_change(&self) {
         let raft = RaftShared {
             role: self.role,
             current_term: self.current_term,
@@ -503,7 +492,7 @@ impl RaftState {
         }
     }
 
-    fn notify_state_change(&self, myself: ActorRef<RaftMsg>) {
+    fn notify_state_change(&self) {
         let raft = RaftShared {
             role: self.role,
             current_term: self.current_term,

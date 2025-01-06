@@ -8,7 +8,7 @@ use tracing::{info, warn};
 use crate::worker::raft::server::RequestVoteAsk;
 use crate::worker::raft::server::rpc::TryAdvanceCommitIndexMsg;
 
-use super::{AppendEntriesAsk, Config, PeerId, RaftMsg, RaftRole, RaftShared};
+use super::{AppendEntriesAsk, Config, RaftMsg, RaftRole, RaftShared};
 
 pub(super) struct Peer;
 
@@ -20,14 +20,17 @@ pub(super) enum PeerMsg {
 }
 
 pub(super) struct PeerState {
+    /// Actor reference
+    actor_ref: ActorRef<PeerMsg>,
+
+    /// Parent actor reference
+    parent: ActorRef<RaftMsg>,
+
     /// Global config.
     config: Config,
 
     /// Per-server raft state
     raft: RaftShared,
-
-    /// Parent Raft server's id
-    parent_id: PeerId,
 
     /// Remote server's reference
     peer: ActorRef<RaftMsg>,
@@ -52,7 +55,7 @@ pub(super) struct PeerArgs {
     /// Per-server raft state
     pub(super) raft: RaftShared,
     /// Parent's id
-    pub(super) parent_id: PeerId,
+    pub(super) parent: ActorRef<RaftMsg>,
     /// Remote server's reference
     pub(super) peer: ActorRef<RaftMsg>,
     /// Index of the last entry in the leader's log.
@@ -67,13 +70,14 @@ impl Actor for Peer {
 
     async fn pre_start(
         &self,
-        _myself: ActorRef<Self::Msg>,
+        myself: ActorRef<Self::Msg>,
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         Ok(PeerState {
+            actor_ref: myself,
+            parent: args.parent,
             config: args.config,
             raft: args.raft,
-            parent_id: args.parent_id,
             peer: args.peer,
             request_vote_done: false,
             next_index: args.last_log_index + 1,
@@ -83,22 +87,22 @@ impl Actor for Peer {
 
     async fn post_start(
         &self,
-        myself: ActorRef<Self::Msg>,
+        _myself: ActorRef<Self::Msg>,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         info!(target: "lifecycle", "started");
-        state.run_loop(myself).await
+        state.run_loop().await
     }
 
     async fn handle(
         &self,
-        myself: ActorRef<Self::Msg>,
+        _myself: ActorRef<Self::Msg>,
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
             PeerMsg::RunLoop => {
-                state.run_loop(myself).await?;
+                state.run_loop().await?;
             }
             PeerMsg::NotifyRoleChange(raft) => {
                 state.raft = raft;
@@ -107,11 +111,11 @@ impl Actor for Peer {
                     RaftRole::Leader => {
                         state.next_index = 1; // TODO
                         state.match_index = 0;
-                        state.run_loop(myself).await?;
+                        state.run_loop().await?;
                     }
                     RaftRole::Candidate => {
                         state.request_vote_done = false;
-                        state.run_loop(myself).await?;
+                        state.run_loop().await?;
                     }
                 }
             }
@@ -124,36 +128,34 @@ impl Actor for Peer {
 }
 
 impl PeerState {
-    async fn run_loop(&mut self, myself: ActorRef<PeerMsg>) -> Result<(), ActorProcessingErr> {
-        let parent = myself
-            .try_get_supervisor()
-            .expect("peer must have a supervisor");
+    async fn run_loop(&mut self) -> Result<(), ActorProcessingErr> {
         match self.raft.role {
             RaftRole::Follower => {}
             RaftRole::Candidate => {
                 if !self.request_vote_done {
-                    self.request_vote(parent.into()).await?;
+                    self.request_vote().await?;
                 }
             }
             RaftRole::Leader => {
-                self.append_entries(parent.into()).await?;
+                self.append_entries().await?;
                 let next_heartbeat = Duration::from_millis(self.config.raft.heartbeat_ms);
-                myself.send_after(next_heartbeat, || PeerMsg::RunLoop);
+                self.actor_ref
+                    .send_after(next_heartbeat, || PeerMsg::RunLoop);
             }
         }
         Ok(())
     }
 
-    async fn request_vote(&mut self, parent: ActorRef<RaftMsg>) -> Result<(), ActorProcessingErr> {
+    async fn request_vote(&mut self) -> Result<(), ActorProcessingErr> {
         let request = RequestVoteAsk {
             term: self.raft.current_term,
-            candidate_id: self.parent_id,
+            candidate_id: self.parent.get_id().into(),
             last_log_index: 0,
             last_log_term: 0,
         };
         info!(
             target: "raft",
-            from = tracing::field::display(self.parent_id),
+            from = tracing::field::display(self.parent.get_id()),
             to = tracing::field::display(self.peer.get_id()),
             "request_vote"
         );
@@ -180,12 +182,16 @@ impl PeerState {
             if response.vote_granted {
                 info!(
                     target: "raft",
+                    myself = tracing::field::display(self.parent.get_id()),
                     peer = tracing::field::display(self.peer.get_id()),
                     peer_term = response.term,
                     current_term = self.raft.current_term,
                     "got one vote",
                 );
-                ractor::cast!(parent, RaftMsg::ReceivedVote(self.peer.get_id().into()))?;
+                ractor::cast!(
+                    self.parent,
+                    RaftMsg::ReceivedVote(self.peer.get_id().into())
+                )?;
             } else {
                 info!(
                     target: "raft",
@@ -200,10 +206,7 @@ impl PeerState {
         Ok(())
     }
 
-    async fn append_entries(
-        &mut self,
-        parent: ActorRef<RaftMsg>,
-    ) -> Result<(), ActorProcessingErr> {
+    async fn append_entries(&mut self) -> Result<(), ActorProcessingErr> {
         assert!(matches!(self.raft.role, RaftRole::Leader));
 
         let prev_log_index = self.next_index - 1;
@@ -214,7 +217,7 @@ impl PeerState {
 
         let request = AppendEntriesAsk {
             term: current_term,
-            leader_id: self.parent_id,
+            leader_id: self.parent.get_id().into(),
             prev_log_index,
             prev_log_term,
             entries: vec![],
@@ -246,7 +249,7 @@ impl PeerState {
                     peer_id: Some(self.peer.get_id().into()),
                     match_index: self.match_index,
                 };
-                parent.cast(RaftMsg::TryAdvanceCommitIndex(msg))?;
+                ractor::cast!(self.parent, RaftMsg::TryAdvanceCommitIndex(msg))?;
 
                 self.next_index = self.match_index + 1;
             } else {
