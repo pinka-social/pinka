@@ -162,28 +162,7 @@ impl Actor for RaftWorker {
         pg::join(RaftWorker::pg_name(), vec![myself.get_cell()]);
         info!(target: "lifecycle", "joined process group");
 
-        let members = pg::get_members(&RaftWorker::pg_name());
-
-        state.cluster_size = members.len();
-
-        for server in members {
-            if server.get_id() == myself.get_id() {
-                continue;
-            }
-            let peer_arg = PeerArgs {
-                config: state.config,
-                raft: RaftShared {
-                    role: state.role,
-                    current_term: state.current_term,
-                    commit_index: state.commit_index,
-                },
-                parent: myself.clone(),
-                peer: server.into(),
-                last_log_index: 0,
-            };
-            let (peer, _) = Actor::spawn_linked(None, Peer, peer_arg, myself.get_cell()).await?;
-            state.peers.push(peer);
-        }
+        state.spawn_peers().await?;
 
         if !matches!(state.role, RaftRole::Leader) {
             state.step_down(state.current_term);
@@ -240,6 +219,33 @@ impl RaftState {
             election_abort_handle: None,
             peers: vec![],
         }
+    }
+
+    async fn spawn_peers(&mut self) -> Result<(), ActorProcessingErr> {
+        let members = pg::get_members(&RaftWorker::pg_name());
+
+        self.cluster_size = members.len();
+        self.peers.clear();
+
+        for server in members {
+            if server.get_id() == self.get_id() {
+                continue;
+            }
+            let peer_arg = PeerArgs {
+                config: self.config,
+                raft: RaftShared {
+                    role: self.role,
+                    current_term: self.current_term,
+                    commit_index: self.commit_index,
+                },
+                parent: self.myself.clone(),
+                peer: server.into(),
+                last_log_index: 0,
+            };
+            let (peer, _) = Actor::spawn_linked(None, Peer, peer_arg, self.get_cell()).await?;
+            self.peers.push(peer);
+        }
+        Ok(())
     }
 
     fn min_quorum_match_index(&self) -> usize {
@@ -462,7 +468,7 @@ impl RaftState {
     fn step_down(&mut self, new_term: u32) {
         assert!(self.current_term <= new_term);
 
-        // let was_leader = matches!(self.role, RaftRole::Leader);
+        let was_leader = matches!(self.role, RaftRole::Leader);
 
         if self.current_term < new_term {
             self.current_term = new_term;
@@ -471,9 +477,9 @@ impl RaftState {
         }
         self.role = RaftRole::Follower;
 
-        // if was_leader {
-        self.set_election_timer();
-        // }
+        if was_leader || self.election_abort_handle.is_none() {
+            self.set_election_timer();
+        }
 
         self.notify_role_change();
     }
