@@ -35,6 +35,8 @@ impl Actor for Supervisor {
         // simulate a cluster of size 3
         Actor::spawn_linked(None, RaftWorker, (Mode::Restart, config), myself.get_cell()).await?;
         Actor::spawn_linked(None, RaftWorker, (Mode::Restart, config), myself.get_cell()).await?;
+        Actor::spawn_linked(None, RaftWorker, (Mode::Restart, config), myself.get_cell()).await?;
+        Actor::spawn_linked(None, RaftWorker, (Mode::Restart, config), myself.get_cell()).await?;
         Actor::spawn_linked(None, RaftWorker, args, myself.get_cell()).await?;
         Ok(SupervisorState { config })
     }
@@ -64,7 +66,7 @@ impl Actor for Supervisor {
                     info!(target: "supervision", "raft_worker crashed, restarting...");
 
                     Actor::spawn_linked(
-                        RaftWorker::name(),
+                        None,
                         RaftWorker,
                         (Mode::Restart, state.config.clone()),
                         myself.into(),

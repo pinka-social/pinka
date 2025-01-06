@@ -14,7 +14,10 @@ use self::rpc::{
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, pg};
 use ractor_cluster::RactorClusterMessage;
 use rand::Rng;
+use tokio::select;
+use tokio::sync::mpsc::{Sender, channel};
 use tokio::task::AbortHandle;
+use tokio::time::{Instant, sleep};
 use tracing::{info, trace, warn};
 
 use crate::Mode;
@@ -106,7 +109,7 @@ pub(crate) struct RaftState {
     votes: BTreeSet<PeerId>,
 
     /// Keeps track of outstanding start election timer.
-    election_abort_handle: Option<AbortHandle>,
+    election_timer: Option<Sender<Duration>>,
 
     /// Peers, workaround bug in ractor
     peers: Vec<ActorRef<PeerMsg>>,
@@ -201,6 +204,37 @@ impl Actor for RaftWorker {
     }
 }
 
+fn election_timer(myself: ActorRef<RaftMsg>, timeout: Duration) -> Sender<Duration> {
+    let (tx, mut rx) = channel(1);
+    let mut sleep = Box::pin(sleep(timeout));
+
+    tokio::spawn(async move {
+        loop {
+            select! {
+                new_timeout = rx.recv() => {
+                    match new_timeout {
+                        Some(timeout) => sleep.as_mut().reset(Instant::now() + timeout),
+                        None => break,
+                    }
+                }
+                _ = &mut sleep => {
+                    if let Err(ref err) = ractor::cast!(myself, RaftMsg::ElectionTimeout) {
+                        warn!(
+                            target: "raft",
+                            myself = %myself.get_id(),
+                            error = err as &dyn Error,
+                            "failed to send election timeout"
+                        );
+                    }
+                    break;
+                }
+            }
+        }
+    });
+
+    tx
+}
+
 impl RaftState {
     fn new(config: Config, myself: ActorRef<RaftMsg>) -> RaftState {
         Self {
@@ -216,7 +250,7 @@ impl RaftState {
             next_index: BTreeMap::new(),
             match_index: BTreeMap::new(),
             votes: BTreeSet::new(),
-            election_abort_handle: None,
+            election_timer: None,
             peers: vec![],
         }
     }
@@ -265,25 +299,21 @@ impl RaftState {
     }
 
     fn set_election_timer(&mut self) {
-        // TODO simplify timer. move timer to a task and only keep a channel to
-        // update the timer.
-        self.unset_election_timer();
-
-        let duration = rand::thread_rng()
-            .gen_range(self.config.raft.min_election_ms..=self.config.raft.max_election_ms);
-
-        // info!("will start election in {} ms", duration);
-        self.election_abort_handle = Some(
-            self.send_after(Duration::from_millis(duration), || RaftMsg::ElectionTimeout)
-                .abort_handle(),
+        let duration = Duration::from_millis(
+            rand::thread_rng()
+                .gen_range(self.config.raft.min_election_ms..=self.config.raft.max_election_ms),
         );
+
+        match self.election_timer {
+            Some(ref timer) if !timer.is_closed() => {
+                let _ = timer.try_send(duration);
+            }
+            _ => self.election_timer = Some(election_timer(self.myself.clone(), duration)),
+        }
     }
 
     fn unset_election_timer(&mut self) {
-        if let Some(ref abort_handle) = self.election_abort_handle {
-            abort_handle.abort();
-        }
-        self.election_abort_handle = None;
+        self.election_timer = None;
     }
 
     fn start_new_election(&mut self) {
@@ -477,7 +507,7 @@ impl RaftState {
         }
         self.role = RaftRole::Follower;
 
-        if was_leader || self.election_abort_handle.is_none() {
+        if was_leader || self.election_timer.is_none() {
             self.set_election_timer();
         }
 
