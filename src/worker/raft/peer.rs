@@ -1,5 +1,5 @@
-use std::error::Error;
 use std::time::Duration;
+use std::{error::Error, ops::Deref};
 
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
@@ -21,7 +21,7 @@ pub(super) enum PeerMsg {
 
 pub(super) struct PeerState {
     /// Actor reference
-    actor_ref: ActorRef<PeerMsg>,
+    myself: ActorRef<PeerMsg>,
 
     /// Parent actor reference
     parent: ActorRef<RaftMsg>,
@@ -74,7 +74,7 @@ impl Actor for Peer {
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         Ok(PeerState {
-            actor_ref: myself,
+            myself,
             parent: args.parent,
             config: args.config,
             raft: args.raft,
@@ -127,6 +127,14 @@ impl Actor for Peer {
     }
 }
 
+impl Deref for PeerState {
+    type Target = ActorRef<PeerMsg>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.myself
+    }
+}
+
 impl PeerState {
     async fn run_loop(&mut self) -> Result<(), ActorProcessingErr> {
         match self.raft.role {
@@ -139,8 +147,7 @@ impl PeerState {
             RaftRole::Leader => {
                 self.append_entries().await?;
                 let next_heartbeat = Duration::from_millis(self.config.raft.heartbeat_ms);
-                self.actor_ref
-                    .send_after(next_heartbeat, || PeerMsg::RunLoop);
+                self.send_after(next_heartbeat, || PeerMsg::RunLoop);
             }
         }
         Ok(())
@@ -155,8 +162,8 @@ impl PeerState {
         };
         info!(
             target: "raft",
-            from = tracing::field::display(self.parent.get_id()),
-            to = tracing::field::display(self.peer.get_id()),
+            from = %self.parent.get_id(),
+            to = %self.peer.get_id(),
             "request_vote"
         );
 
@@ -172,7 +179,7 @@ impl PeerState {
         if response.term > self.raft.current_term {
             info!(
                 target: "raft",
-                peer = tracing::field::display(self.peer.get_id()),
+                peer = %self.peer.get_id(),
                 peer_term = response.term,
                 current_term = self.raft.current_term,
                 "received request_vote response",
@@ -182,8 +189,8 @@ impl PeerState {
             if response.vote_granted {
                 info!(
                     target: "raft",
-                    myself = tracing::field::display(self.parent.get_id()),
-                    peer = tracing::field::display(self.peer.get_id()),
+                    myself = %self.parent.get_id(),
+                    peer = %self.peer.get_id(),
                     peer_term = response.term,
                     current_term = self.raft.current_term,
                     "got one vote",
@@ -195,7 +202,7 @@ impl PeerState {
             } else {
                 info!(
                     target: "raft",
-                    peer = tracing::field::display(self.peer.get_id()),
+                    peer = %self.peer.get_id(),
                     peer_term = response.term,
                     current_term = self.raft.current_term,
                     "vote was denied",

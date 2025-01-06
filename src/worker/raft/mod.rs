@@ -2,6 +2,7 @@ mod peer;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
+use std::ops::Deref;
 use std::time::Duration;
 
 use self::peer::{Peer, PeerArgs, PeerMsg};
@@ -10,7 +11,7 @@ use self::rpc::{
     TryAdvanceCommitIndexMsg,
 };
 
-use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent, pg};
+use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, pg};
 use ractor_cluster::RactorClusterMessage;
 use rand::Rng;
 use tokio::task::AbortHandle;
@@ -59,7 +60,7 @@ struct RaftShared {
 #[derive(Debug)]
 pub(crate) struct RaftState {
     /// Actor reference
-    actor_ref: ActorRef<RaftMsg>,
+    myself: ActorRef<RaftMsg>,
 
     /// Cluster config
     config: Config,
@@ -109,6 +110,14 @@ pub(crate) struct RaftState {
 
     /// Peers, workaround bug in ractor
     peers: Vec<ActorRef<PeerMsg>>,
+}
+
+impl Deref for RaftState {
+    type Target = ActorRef<RaftMsg>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.myself
+    }
 }
 
 impl RaftWorker {
@@ -216,7 +225,7 @@ impl Actor for RaftWorker {
 impl RaftState {
     fn new(config: Config, myself: ActorRef<RaftMsg>) -> RaftState {
         Self {
-            actor_ref: myself,
+            myself,
             config,
             role: RaftRole::Follower,
             current_term: 0,
@@ -259,8 +268,7 @@ impl RaftState {
 
         // info!("will start election in {} ms", duration);
         self.election_abort_handle = Some(
-            self.actor_ref
-                .send_after(Duration::from_millis(duration), || RaftMsg::ElectionTimeout)
+            self.send_after(Duration::from_millis(duration), || RaftMsg::ElectionTimeout)
                 .abort_handle(),
         );
     }
@@ -276,15 +284,15 @@ impl RaftState {
         if let Some(leader_id) = self.leader_id {
             info!(
                 target: "raft",
-                myself = tracing::field::display(self.actor_ref.get_id()),
+                myself = %self.get_id(),
                 term = self.current_term + 1,
-                prev_leader_id = tracing::field::display(leader_id),
+                prev_leader_id = %leader_id,
                 "running for election (unresponsive leader)"
             );
         } else if matches!(self.role, RaftRole::Candidate) {
             info!(
                 target: "raft",
-                myself = tracing::field::display(self.actor_ref.get_id()),
+                myself = %self.get_id(),
                 term = self.current_term + 1,
                 prev_term = self.current_term,
                 "running for election (previous candidacy timed out)"
@@ -292,7 +300,7 @@ impl RaftState {
         } else {
             info!(
                 target: "raft",
-                myself = tracing::field::display(self.actor_ref.get_id()),
+                myself = %self.get_id(),
                 term = self.current_term + 1,
                 "running for election"
             );
@@ -300,9 +308,9 @@ impl RaftState {
         self.current_term += 1;
         self.role = RaftRole::Candidate;
         self.leader_id = None;
-        self.voted_for = Some(self.actor_ref.get_id().into());
+        self.voted_for = Some(self.get_id().into());
         self.votes.clear();
-        self.votes.insert(self.actor_ref.get_id().into());
+        self.votes.insert(self.get_id().into());
         self.set_election_timer();
         self.notify_role_change();
 
@@ -339,8 +347,8 @@ impl RaftState {
     ) {
         info!(
             target: "raft",
-            from = tracing::field::display(request.candidate_id),
-            myself = tracing::field::display(self.actor_ref.get_id()),
+            from = %request.candidate_id,
+            myself = %self.get_id(),
             current_term = self.current_term,
             "received request for vote"
         );
@@ -352,7 +360,8 @@ impl RaftState {
         if request.term == self.current_term {
             info!(
                 target: "raft",
-                peer = tracing::field::display(request.candidate_id),
+                myself = %self.get_id(),
+                peer = %request.candidate_id,
                 current_term = self.current_term,
                 "voted"
             );
@@ -369,7 +378,7 @@ impl RaftState {
         if let Err(ref err) = reply.send(response) {
             warn!(
                 error = err as &dyn Error,
-                peer = tracing::field::display(request.candidate_id),
+                peer = %request.candidate_id,
                 "sending request vote reply failed"
             );
         }
@@ -390,7 +399,7 @@ impl RaftState {
                 "received stale request from server {} in term {} (this server's term was {}",
                 request.leader_id,
                 request.term,
-                self.actor_ref.get_id()
+                self.get_id()
             );
             return;
         }
@@ -428,8 +437,8 @@ impl RaftState {
         if !matches!(self.role, RaftRole::Candidate) {
             warn!(
                 target: "raft",
-                peer = tracing::field::display(peer_id),
-                myself = tracing::field::display(self.actor_ref.get_id()),
+                peer = %peer_id,
+                myself = %self.get_id(),
                 "received vote but not a candidate"
             );
             return;
