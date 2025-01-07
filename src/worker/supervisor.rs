@@ -2,6 +2,8 @@ use ractor::{Actor, ActorProcessingErr, ActorRef, SupervisionEvent};
 use ractor_cluster::RactorMessage;
 use tracing::info;
 
+use crate::config::Config;
+
 use super::{RaftMsg, RaftWorker};
 
 pub(crate) struct Supervisor;
@@ -9,26 +11,37 @@ pub(crate) struct Supervisor;
 #[derive(RactorMessage)]
 pub(crate) enum SupervisorMsg {}
 
-pub(crate) struct SupervisorState {}
+pub(crate) struct SupervisorState {
+    config: Config,
+}
 
 pub(crate) enum Mode {
     Bootstrap,
     Restart,
 }
 
-#[ractor::async_trait]
 impl Actor for Supervisor {
     type Msg = SupervisorMsg;
     type State = SupervisorState;
-    type Arguments = Mode;
+    type Arguments = (Mode, Config);
 
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        Actor::spawn_linked(RaftWorker::name(), RaftWorker, args, myself.into()).await?;
-        Ok(SupervisorState {})
+        let config = args.1.clone();
+        for _ in 0..config.raft.cluster_size {
+            let name = RaftWorker::gen_name();
+            Actor::spawn_linked(
+                Some(name),
+                RaftWorker,
+                (Mode::Restart, config),
+                myself.get_cell(),
+            )
+            .await?;
+        }
+        Ok(SupervisorState { config })
     }
 
     async fn post_start(
@@ -44,7 +57,7 @@ impl Actor for Supervisor {
         &self,
         myself: ActorRef<Self::Msg>,
         message: SupervisionEvent,
-        _state: &mut Self::State,
+        state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         use SupervisionEvent::*;
 
@@ -54,11 +67,10 @@ impl Actor for Supervisor {
             ActorFailed(actor_cell, _error) => {
                 if matches!(actor_cell.is_message_type_of::<RaftMsg>(), Some(true)) {
                     info!(target: "supervision", "raft_worker crashed, restarting...");
-
                     Actor::spawn_linked(
-                        RaftWorker::name(),
+                        Some(RaftWorker::gen_name()),
                         RaftWorker,
-                        Mode::Restart,
+                        (Mode::Restart, state.config.clone()),
                         myself.into(),
                     )
                     .await?;

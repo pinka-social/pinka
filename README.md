@@ -2,9 +2,11 @@
 
 - [ ] Actor based Raft core
     - [x] Supervisor tree
-    - [ ] Leader election
+    - [x] Leader election
         - [x] AppendEntries RPC
         - [x] RequestVote RPC
+    - [ ] Remote servers
+    - [ ] Cluster changes
     - [ ] Log replication
     - [ ] Client request forwarding
     - [ ] Graceful shutdown
