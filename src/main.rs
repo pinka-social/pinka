@@ -20,6 +20,7 @@ async fn main() -> Result<()> {
     };
     let config = Config {
         raft: RaftConfig {
+            cluster_size: 5,
             heartbeat_ms: 100,
             min_election_ms: 150,
             max_election_ms: 300,

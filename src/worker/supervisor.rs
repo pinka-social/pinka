@@ -20,7 +20,6 @@ pub(crate) enum Mode {
     Restart,
 }
 
-#[ractor::async_trait]
 impl Actor for Supervisor {
     type Msg = SupervisorMsg;
     type State = SupervisorState;
@@ -32,12 +31,16 @@ impl Actor for Supervisor {
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         let config = args.1.clone();
-        // simulate a cluster of size 3
-        Actor::spawn_linked(None, RaftWorker, (Mode::Restart, config), myself.get_cell()).await?;
-        Actor::spawn_linked(None, RaftWorker, (Mode::Restart, config), myself.get_cell()).await?;
-        Actor::spawn_linked(None, RaftWorker, (Mode::Restart, config), myself.get_cell()).await?;
-        Actor::spawn_linked(None, RaftWorker, (Mode::Restart, config), myself.get_cell()).await?;
-        Actor::spawn_linked(None, RaftWorker, args, myself.get_cell()).await?;
+        for _ in 0..config.raft.cluster_size {
+            let name = RaftWorker::gen_name();
+            Actor::spawn_linked(
+                Some(name),
+                RaftWorker,
+                (Mode::Restart, config),
+                myself.get_cell(),
+            )
+            .await?;
+        }
         Ok(SupervisorState { config })
     }
 
@@ -64,9 +67,8 @@ impl Actor for Supervisor {
             ActorFailed(actor_cell, _error) => {
                 if matches!(actor_cell.is_message_type_of::<RaftMsg>(), Some(true)) {
                     info!(target: "supervision", "raft_worker crashed, restarting...");
-
                     Actor::spawn_linked(
-                        None,
+                        Some(RaftWorker::gen_name()),
                         RaftWorker,
                         (Mode::Restart, state.config.clone()),
                         myself.into(),

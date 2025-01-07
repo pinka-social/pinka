@@ -8,9 +8,13 @@ anyhow = "1.0"
 axum = "0.8.1"
 fjall = "2.4"
 futures = "0.3.31"
-postcard = { version = "1.1.1", default-features = false, features = ["use-std"] }
-ractor = { version = "0.14.2", features = ["cluster"] }
-ractor_cluster = "0.14.2"
+postcard = { version = "1.1.1", default-features = false, features = [
+    "use-std",
+] }
+ractor = { version = "0.14.3", default-features = false, features = [
+    "cluster",
+], path = "../../ractor/ractor" }
+ractor_cluster = { version = "0.14.3", path = "../../ractor/ractor_cluster" }
 rand = "0.8.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

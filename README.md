@@ -2,7 +2,7 @@
 
 - [ ] Actor based Raft core
     - [x] Supervisor tree
-    - [ ] Leader election
+    - [x] Leader election
         - [x] AppendEntries RPC
         - [x] RequestVote RPC
     - [ ] Log replication
