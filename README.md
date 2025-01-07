@@ -5,6 +5,8 @@
     - [x] Leader election
         - [x] AppendEntries RPC
         - [x] RequestVote RPC
+    - [ ] Remote servers
+    - [ ] Cluster changes
     - [ ] Log replication
     - [ ] Client request forwarding
     - [ ] Graceful shutdown
