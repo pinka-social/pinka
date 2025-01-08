@@ -20,8 +20,8 @@ use tokio::sync::mpsc::{Sender, channel};
 use tokio::time::{Instant, sleep};
 use tracing::{info, trace, warn};
 
-use crate::Mode;
 use crate::config::Config;
+use crate::flags::{self, Flags};
 
 pub(crate) struct RaftWorker;
 
@@ -129,17 +129,17 @@ impl RaftWorker {
 impl Actor for RaftWorker {
     type Msg = RaftMsg;
     type State = RaftState;
-    type Arguments = (Mode, Config);
+    type Arguments = (bool, Config);
 
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let (mode, config) = args;
+        let (bootstrap, config) = args;
         let mut state = RaftState::new(config, myself);
 
-        if matches!(mode, Mode::Bootstrap) {
+        if bootstrap {
             info!(target: "spawn", "in bootstrap mode, assume leader's role");
             state.role = RaftRole::Leader;
         }
@@ -313,7 +313,7 @@ impl RaftState {
                 continue;
             }
             let args = ReplicateArgs {
-                config: self.config,
+                config: self.config.clone(),
                 raft: RaftShared {
                     current_term: self.current_term,
                     commit_index: self.commit_index,
@@ -339,10 +339,11 @@ impl RaftState {
     }
 
     fn voted_has_quorum(&self) -> bool {
-        if self.config.raft.cluster_size == 1 {
+        let cluster_size = self.config.cluster.servers.len();
+        if cluster_size == 1 {
             return true;
         }
-        self.votes.len() >= self.config.raft.cluster_size / 2 + 1
+        self.votes.len() >= cluster_size / 2 + 1
     }
 
     fn set_election_timer(&mut self) {
@@ -409,6 +410,10 @@ impl RaftState {
 
     fn request_vote(&mut self) {
         for peer in pg::get_scoped_members(&"raft".into(), &RaftWorker::pg_name()) {
+            if peer.get_id() == self.get_id() {
+                continue;
+            }
+
             let peer: ActorRef<RaftMsg> = peer.into();
 
             let request = RequestVoteAsk {
@@ -420,8 +425,8 @@ impl RaftState {
 
             info!(
                 target: "raft",
-                from = %self.get_id(),
-                to = %peer.get_id(),
+                from = %self.peer_id(),
+                to = %peer.get_name().unwrap(),
                 "request_vote"
             );
 
@@ -433,7 +438,7 @@ impl RaftState {
     }
 
     fn try_advance_commit_index(&mut self, peer_info: TryAdvanceCommitIndexMsg) {
-        if thread_rng().gen_bool(1.0 / 100.0) {
+        if thread_rng().gen_bool(1.0 / 10000.0) {
             panic!("simulated crash");
         }
         if !matches!(self.role, RaftRole::Leader) {
@@ -482,18 +487,26 @@ impl RaftState {
             // TODO persist votes
         }
 
-        if let Some(candidate) = ActorRef::<RaftMsg>::where_is(request.candidate_name.clone()) {
-            let response = RequestVoteReply {
-                term: self.current_term,
-                vote_granted: self.voted_for == Some(request.candidate_name.clone()),
-                vote_from: self.peer_id(),
-            };
-            if let Err(ref err) = ractor::cast!(candidate, RaftMsg::RequestVoteResponse(response)) {
-                warn!(
-                    error = err as &dyn Error,
-                    peer = %request.candidate_name,
-                    "sending request vote reply failed"
-                );
+        for server in pg::get_scoped_members(&"raft".into(), &RaftWorker::pg_name()) {
+            if server.get_id() == self.get_id() {
+                continue;
+            }
+            if server.get_name().as_ref() == Some(&request.candidate_name) {
+                let response = RequestVoteReply {
+                    term: self.current_term,
+                    vote_granted: self.voted_for == Some(request.candidate_name.clone()),
+                    vote_from: self.peer_id(),
+                };
+                let server: ActorRef<RaftMsg> = server.into();
+                if let Err(ref err) = ractor::cast!(server, RaftMsg::RequestVoteResponse(response))
+                {
+                    warn!(
+                        error = err as &dyn Error,
+                        peer = %request.candidate_name,
+                        "sending request vote reply failed"
+                    );
+                }
+                break;
             }
         }
     }
@@ -622,6 +635,7 @@ impl RaftState {
         self.replicate_workers.clear();
 
         if was_leader || self.election_timer.is_none() {
+            warn!("stepping down");
             self.set_election_timer();
         }
     }
