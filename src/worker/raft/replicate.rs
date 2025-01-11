@@ -7,7 +7,7 @@ use tracing::{info, warn};
 
 use crate::worker::raft::rpc::TryAdvanceCommitIndexMsg;
 
-use super::{AppendEntriesAsk, Config, RaftMsg, RaftShared};
+use super::{AppendEntriesAsk, RaftMsg, RaftShared, RuntimeConfig};
 
 pub(super) struct ReplicateWorker;
 
@@ -25,7 +25,7 @@ pub(super) struct ReplicateState {
     parent: ActorRef<RaftMsg>,
 
     /// Global config.
-    config: Config,
+    config: RuntimeConfig,
 
     /// Per-server raft state
     raft: RaftShared,
@@ -46,7 +46,7 @@ pub(super) struct ReplicateState {
 
 pub(super) struct ReplicateArgs {
     /// Global config.
-    pub(super) config: Config,
+    pub(super) config: RuntimeConfig,
     /// Per-server raft state
     pub(super) raft: RaftShared,
     /// Parent's id
@@ -116,7 +116,7 @@ impl Deref for ReplicateState {
 impl ReplicateState {
     async fn run_loop(&mut self) -> Result<(), ActorProcessingErr> {
         self.append_entries().await?;
-        let next_heartbeat = Duration::from_millis(self.config.raft.heartbeat_ms);
+        let next_heartbeat = Duration::from_millis(self.config.init.raft.heartbeat_ms);
         self.send_after(next_heartbeat, || ReplicateMsg::RunLoop);
         Ok(())
     }

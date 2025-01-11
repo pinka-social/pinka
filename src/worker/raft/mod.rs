@@ -11,16 +11,19 @@ use self::rpc::{
     TryAdvanceCommitIndexMsg,
 };
 
-use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent, pg};
+use anyhow::Context;
+use fjall::{KvSeparationOptions, PartitionCreateOptions, PartitionHandle};
+use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, pg};
 use ractor_cluster::RactorClusterMessage;
-use rand::distributions::{Alphanumeric, DistString};
 use rand::{Rng, thread_rng};
+use serde::{Deserialize, Serialize};
 use tokio::select;
 use tokio::sync::mpsc::{Sender, channel};
+use tokio::task::block_in_place;
 use tokio::time::{Instant, sleep};
 use tracing::{info, trace, warn};
 
-use crate::config::Config;
+use crate::config::RuntimeConfig;
 
 pub(crate) struct RaftWorker;
 
@@ -55,13 +58,32 @@ struct RaftShared {
     commit_index: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct RaftSaved {
+    /// Latest term this worker has seen (initialized to 0 on first boot,
+    /// increases monotonically).
+    ///
+    /// Updated on stable storage before responding to RPCs.
+    current_term: u32,
+
+    /// CandidateId that received vote in current term (or None if none).
+    ///
+    /// Updated on stable storage before responding to RPCs.
+    voted_for: Option<PeerId>,
+}
+
 pub(crate) struct RaftState {
     /// Actor reference
     myself: ActorRef<RaftMsg>,
 
     /// Cluster config
-    config: Config,
+    config: RuntimeConfig,
+
+    /// Raft log partition
+    log: PartitionHandle,
+
+    /// State restore partition
+    restore: PartitionHandle,
 
     /// Role played by the worker.
     role: RaftRole,
@@ -116,10 +138,6 @@ impl Deref for RaftState {
 }
 
 impl RaftWorker {
-    pub(crate) fn gen_name() -> String {
-        Alphanumeric.sample_string(&mut thread_rng(), 6)
-    }
-
     pub(crate) fn pg_name() -> String {
         "raft_worker".into()
     }
@@ -128,7 +146,7 @@ impl RaftWorker {
 impl Actor for RaftWorker {
     type Msg = RaftMsg;
     type State = RaftState;
-    type Arguments = (bool, Config);
+    type Arguments = (bool, RuntimeConfig);
 
     async fn pre_start(
         &self,
@@ -136,11 +154,35 @@ impl Actor for RaftWorker {
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         let (bootstrap, config) = args;
-        let mut state = RaftState::new(config, myself);
+
+        let log = block_in_place(|| {
+            config.keyspace.open_partition(
+                "raft_log",
+                PartitionCreateOptions::default()
+                    .compression(fjall::CompressionType::Lz4)
+                    .manual_journal_persist(true)
+                    .with_kv_separation(KvSeparationOptions::default()),
+            )
+        })?;
+
+        let restore = block_in_place(|| {
+            config.keyspace.open_partition(
+                "raft_restore",
+                PartitionCreateOptions::default()
+                    .compression(fjall::CompressionType::Lz4)
+                    .manual_journal_persist(true),
+            )
+        })?;
+
+        let mut state = RaftState::new(myself, config, log, restore);
 
         if bootstrap {
+            // TODO: should we disallow bootstrap twice?
             info!(target: "spawn", "in bootstrap mode, assume leader's role");
             state.role = RaftRole::Leader;
+        } else {
+            // Restore state
+            state.restore_state().await?;
         }
 
         Ok(state)
@@ -160,7 +202,7 @@ impl Actor for RaftWorker {
         info!(target: "lifecycle", "joined process group");
 
         if !matches!(state.role, RaftRole::Leader) {
-            state.step_down(state.current_term);
+            state.step_down(state.current_term).await?;
         }
 
         Ok(())
@@ -176,10 +218,10 @@ impl Actor for RaftWorker {
 
         match message {
             RequestVote(request) => {
-                state.handle_request_vote(request);
+                state.handle_request_vote(request).await?;
             }
             AppendEntries(request, reply) => {
-                state.handle_append_entries(request, reply);
+                state.handle_append_entries(request, reply).await?;
             }
             ElectionTimeout => {
                 state.start_new_election().await?;
@@ -192,60 +234,6 @@ impl Actor for RaftWorker {
             }
         }
 
-        Ok(())
-    }
-
-    async fn handle_supervisor_evt(
-        &self,
-        _myself: ActorRef<RaftMsg>,
-        message: SupervisionEvent,
-        state: &mut Self::State,
-    ) -> Result<(), ActorProcessingErr> {
-        match message {
-            SupervisionEvent::ActorStarted(_) => {}
-            SupervisionEvent::ActorTerminated(_, _, _) => {}
-            SupervisionEvent::ActorFailed(_, _) => {}
-            SupervisionEvent::ProcessGroupChanged(group_change_message) => {
-                // match group_change_message {
-                //     pg::GroupChangeMessage::Join(scope, group, actors) => {
-                //         if scope == "raft" && group == RaftWorker::pg_name() {
-                //             for p in actors {
-                //                 let peer_arg = PeerArgs {
-                //                     config: state.config,
-                //                     raft: RaftShared {
-                //                         role: state.role,
-                //                         current_term: state.current_term,
-                //                         commit_index: state.commit_index,
-                //                     },
-                //                     parent: state.myself.clone(),
-                //                     peer: p.into(),
-                //                     last_log_index: 0,
-                //                 };
-                //                 let (peer, _) =
-                //                     Actor::spawn_linked(None, Peer, peer_arg, state.get_cell())
-                //                         .await?;
-                //                 state.peers.push(peer);
-                //             }
-                //         }
-                //     }
-                //     pg::GroupChangeMessage::Leave(scope, group, actors) => {
-                //         if scope == "raft" && group == RaftWorker::pg_name() {
-                //             let removed = actors
-                //                 .into_iter()
-                //                 .map(|p| p.get_id())
-                //                 .collect::<BTreeSet<_>>();
-                //             state.peers = state
-                //                 .peers
-                //                 .iter()
-                //                 .filter(|p| removed.contains(&p.get_id()))
-                //                 .cloned()
-                //                 .collect();
-                //         }
-                //     }
-                // }
-            }
-            SupervisionEvent::PidLifecycleEvent(pid_lifecycle_event) => {}
-        }
         Ok(())
     }
 }
@@ -282,10 +270,17 @@ fn election_timer(myself: ActorRef<RaftMsg>, timeout: Duration) -> Sender<Durati
 }
 
 impl RaftState {
-    fn new(config: Config, myself: ActorRef<RaftMsg>) -> RaftState {
+    fn new(
+        myself: ActorRef<RaftMsg>,
+        config: RuntimeConfig,
+        log: PartitionHandle,
+        restore: PartitionHandle,
+    ) -> RaftState {
         Self {
             myself,
             config,
+            log,
+            restore,
             role: RaftRole::Follower,
             current_term: 0,
             voted_for: None,
@@ -302,6 +297,39 @@ impl RaftState {
 
     fn peer_id(&self) -> PeerId {
         self.get_name().unwrap()
+    }
+
+    async fn restore_state(&mut self) -> Result<(), ActorProcessingErr> {
+        let saved: RaftSaved = block_in_place(|| match self.restore.get("raft_saved") {
+            Ok(Some(value)) => postcard::from_bytes(&value),
+            _ => Ok(RaftSaved::default()),
+        })?;
+        self.current_term = saved.current_term;
+        self.voted_for = saved.voted_for;
+        Ok(())
+    }
+
+    async fn persist_state(&mut self) -> Result<(), ActorProcessingErr> {
+        let saved = RaftSaved {
+            current_term: self.current_term,
+            voted_for: self.voted_for.clone(),
+        };
+        block_in_place(|| {
+            postcard::to_stdvec(&saved)
+                .context("Failed to serialize raft_saved state")
+                .and_then(|value| {
+                    self.restore
+                        .insert("raft_saved", value.as_slice())
+                        .context("Failed to update raft_saved state")
+                })
+                .and_then(|_| {
+                    self.config
+                        .keyspace
+                        .persist(fjall::PersistMode::SyncAll)
+                        .context("Failed to persist change")
+                })
+        })?;
+        Ok(())
     }
 
     async fn spawn_replicate_workers(&mut self) -> Result<(), ActorProcessingErr> {
@@ -338,7 +366,7 @@ impl RaftState {
     }
 
     fn voted_has_quorum(&self) -> bool {
-        let cluster_size = self.config.cluster.servers.len();
+        let cluster_size = self.config.init.cluster.servers.len();
         if cluster_size == 1 {
             return true;
         }
@@ -346,10 +374,9 @@ impl RaftState {
     }
 
     fn set_election_timer(&mut self) {
-        let duration = Duration::from_millis(
-            rand::thread_rng()
-                .gen_range(self.config.raft.min_election_ms..=self.config.raft.max_election_ms),
-        );
+        let duration = Duration::from_millis(rand::thread_rng().gen_range(
+            self.config.init.raft.min_election_ms..=self.config.init.raft.max_election_ms,
+        ));
 
         match self.election_timer {
             Some(ref timer) if !timer.is_closed() => {
@@ -392,6 +419,7 @@ impl RaftState {
         self.role = RaftRole::Candidate;
         self.leader_id = None;
         self.voted_for = Some(self.peer_id());
+        self.persist_state().await?;
         self.votes.clear();
         self.votes.insert(self.peer_id());
         self.set_election_timer();
@@ -459,7 +487,10 @@ impl RaftState {
         self.notify_state_change();
     }
 
-    fn handle_request_vote(&mut self, request: RequestVoteAsk) {
+    async fn handle_request_vote(
+        &mut self,
+        request: RequestVoteAsk,
+    ) -> Result<(), ActorProcessingErr> {
         info!(
             target: "raft",
             from = %request.candidate_name,
@@ -470,7 +501,7 @@ impl RaftState {
         // TODO verify log completeness
         // TODO ignore distrubing request_vote
         if request.term > self.current_term {
-            self.step_down(request.term);
+            self.step_down(request.term).await?;
         }
         if request.term == self.current_term && self.voted_for.is_none() {
             info!(
@@ -480,10 +511,10 @@ impl RaftState {
                 current_term = self.current_term,
                 "voted"
             );
-            self.step_down(self.current_term);
+            self.step_down(self.current_term).await?;
             self.set_election_timer();
             self.voted_for = Some(request.candidate_name.clone());
-            // TODO persist votes
+            self.persist_state().await?;
         }
 
         for server in pg::get_scoped_members(&"raft".into(), &RaftWorker::pg_name()) {
@@ -508,13 +539,15 @@ impl RaftState {
                 break;
             }
         }
+
+        Ok(())
     }
 
-    fn handle_append_entries(
+    async fn handle_append_entries(
         &mut self,
         request: AppendEntriesAsk,
         reply: RpcReplyPort<AppendEntriesReply>,
-    ) {
+    ) -> Result<(), ActorProcessingErr> {
         let mut response = AppendEntriesReply {
             term: self.current_term,
             success: false,
@@ -527,7 +560,7 @@ impl RaftState {
                 request.term,
                 self.get_id()
             );
-            return;
+            return Ok(());
         }
         if request.term > self.current_term {
             info!(
@@ -539,7 +572,7 @@ impl RaftState {
             );
             response.term = request.term;
         }
-        self.step_down(request.term);
+        self.step_down(request.term).await?;
         self.set_election_timer();
 
         if self.leader_id.is_none() {
@@ -557,6 +590,8 @@ impl RaftState {
         if let Err(ref err) = reply.send(response) {
             warn!(target: "rpc", error = err as &dyn Error, "send response to append_entries failed");
         }
+
+        Ok(())
     }
 
     async fn received_vote(&mut self, reply: RequestVoteReply) -> Result<(), ActorProcessingErr> {
@@ -568,7 +603,7 @@ impl RaftState {
                 current_term = self.current_term,
                 "received request_vote response",
             );
-            self.step_down(reply.term);
+            self.step_down(reply.term).await?;
         } else {
             if reply.vote_granted {
                 info!(
@@ -619,7 +654,7 @@ impl RaftState {
         // TODO append no-op log
     }
 
-    fn step_down(&mut self, new_term: u32) {
+    async fn step_down(&mut self, new_term: u32) -> Result<(), ActorProcessingErr> {
         assert!(self.current_term <= new_term);
 
         let was_leader = matches!(self.role, RaftRole::Leader);
@@ -628,6 +663,7 @@ impl RaftState {
             self.current_term = new_term;
             self.leader_id = None;
             self.voted_for = None;
+            self.persist_state().await?;
         }
         self.role = RaftRole::Follower;
         self.stop_children(None);
@@ -637,6 +673,7 @@ impl RaftState {
             warn!("stepping down");
             self.set_election_timer();
         }
+        Ok(())
     }
 
     fn reset_match_index(&mut self) {

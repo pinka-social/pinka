@@ -1,5 +1,7 @@
+use std::fmt::Debug;
 use std::path::PathBuf;
 
+use fjall::Keyspace;
 use serde::Deserialize;
 
 #[derive(Clone, Default, Debug, Deserialize)]
@@ -7,6 +9,7 @@ use serde::Deserialize;
 pub(crate) struct Config {
     pub(crate) raft: RaftConfig,
     pub(crate) cluster: ClusterConfig,
+    pub(crate) database: DatabaseConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -41,6 +44,18 @@ pub(crate) struct ServerConfig {
     pub(crate) client_key: Option<PathBuf>,
 }
 
+#[derive(Clone, Default, Debug, Deserialize)]
+#[serde(default)]
+pub(crate) struct DatabaseConfig {
+    pub(crate) path: PathBuf,
+}
+
+#[derive(Clone)]
+pub(crate) struct RuntimeConfig {
+    pub(crate) init: Config,
+    pub(crate) keyspace: Keyspace,
+}
+
 impl Default for RaftConfig {
     fn default() -> Self {
         Self {
@@ -48,5 +63,14 @@ impl Default for RaftConfig {
             min_election_ms: 150,
             max_election_ms: 300,
         }
+    }
+}
+
+impl Debug for RuntimeConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuntimeConfig")
+            .field("init", &self.init)
+            .field("keyspace", &"[..]")
+            .finish()
     }
 }

@@ -9,7 +9,9 @@ use ractor::Actor;
 use tokio::signal::unix::{SignalKind, signal};
 use tracing::info;
 
-use self::config::{ClusterConfig, Config, RaftConfig, ServerConfig};
+use self::config::{
+    ClusterConfig, Config, DatabaseConfig, RaftConfig, RuntimeConfig, ServerConfig,
+};
 use self::flags::Flags;
 use self::worker::Supervisor;
 
@@ -63,6 +65,9 @@ async fn main() -> Result<()> {
                 },
             ],
         },
+        database: DatabaseConfig {
+            path: "devdb".into(),
+        },
     };
 
     if config.cluster.servers.len() < flags.server.unwrap_or_default() {
@@ -73,6 +78,19 @@ async fn main() -> Result<()> {
         );
         exit(1);
     }
+
+    let keyspace = fjall::Config::new(
+        config
+            .database
+            .path
+            .join(&config.cluster.servers[flags.server.unwrap_or_default()].name),
+    )
+    .open()?;
+
+    let config = RuntimeConfig {
+        init: config,
+        keyspace,
+    };
 
     let (supervisor, actor_handle) =
         Actor::spawn(Some("supervisor".into()), Supervisor, (flags, config)).await?;

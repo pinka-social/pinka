@@ -14,7 +14,7 @@ use tokio_rustls::rustls::{
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tracing::{info, warn};
 
-use crate::config::{Config, ServerConfig};
+use crate::config::{RuntimeConfig, ServerConfig};
 use crate::flags::Flags;
 
 use super::raft::{RaftMsg, RaftWorker};
@@ -26,14 +26,14 @@ pub(crate) enum SupervisorMsg {}
 
 pub(crate) struct SupervisorState {
     server: ServerConfig,
-    config: Config,
+    config: RuntimeConfig,
     myself: ActorRef<SupervisorMsg>,
 }
 
 impl Actor for Supervisor {
     type Msg = SupervisorMsg;
     type State = SupervisorState;
-    type Arguments = (Flags, Config);
+    type Arguments = (Flags, RuntimeConfig);
 
     async fn pre_start(
         &self,
@@ -42,7 +42,7 @@ impl Actor for Supervisor {
     ) -> Result<Self::State, ActorProcessingErr> {
         let flags = &args.0;
         let config = args.1.clone();
-        let server = config.cluster.servers[flags.server.unwrap_or_default()].clone();
+        let server = config.init.cluster.servers[flags.server.unwrap_or_default()].clone();
 
         Actor::spawn_linked(
             Some(server.name.clone()),
@@ -117,14 +117,14 @@ impl Actor for Supervisor {
 
 impl SupervisorState {
     async fn spawn_node_server(&self) -> Result<ActorRef<NodeServerMessage>, ActorProcessingErr> {
-        let encryption_mode = if self.config.cluster.use_mtls {
+        let encryption_mode = if self.config.init.cluster.use_mtls {
             IncomingEncryptionMode::Tls(self.get_tls_acceptor().await?)
         } else {
             IncomingEncryptionMode::Raw
         };
         let node = NodeServer::new(
             self.server.port,
-            self.config.cluster.auth_cookie.clone(),
+            self.config.init.cluster.auth_cookie.clone(),
             self.server.name.clone(),
             self.server.hostname.clone(),
             Some(encryption_mode),
@@ -141,12 +141,12 @@ impl SupervisorState {
             Some(node_server) => node_server,
             None => self.spawn_node_server().await?,
         };
-        for peer in self.config.cluster.servers.iter().cloned() {
+        for peer in self.config.init.cluster.servers.iter().cloned() {
             if peer.name == self.server.name {
                 continue;
             }
             let node_server = node_server.clone();
-            let tls_connector = if self.config.cluster.use_mtls {
+            let tls_connector = if self.config.init.cluster.use_mtls {
                 Some(self.get_tls_connector().await?)
             } else {
                 None
@@ -182,6 +182,7 @@ impl SupervisorState {
     fn get_cert_dir(&self) -> anyhow::Result<PathBuf> {
         Ok(self
             .config
+            .init
             .cluster
             .pem_dir
             .clone()
@@ -198,6 +199,7 @@ impl SupervisorState {
         info!(target: "session", "loading CA certificates");
         for cert_name in self
             .config
+            .init
             .cluster
             .ca_certs
             .iter()
