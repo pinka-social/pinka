@@ -22,8 +22,8 @@ pub(crate) struct RaftConfig {
 pub(crate) struct ClusterConfig {
     pub(crate) auth_cookie: String,
     pub(crate) use_mtls: bool,
-    pub(crate) cert_dir: Option<PathBuf>,
-    pub(crate) disable_system_root_store: bool,
+    pub(crate) pem_dir: Option<PathBuf>,
+    pub(crate) ca_certs: Vec<PathBuf>,
     pub(crate) servers: Vec<ServerConfig>,
 }
 
@@ -33,11 +33,12 @@ pub(crate) struct ServerConfig {
     pub(crate) name: String,
     pub(crate) hostname: String,
     pub(crate) port: u16,
-    pub(crate) ca_cert_names: Vec<PathBuf>,
-    pub(crate) server_cert_name: Option<PathBuf>,
-    pub(crate) server_priv_name: Option<PathBuf>,
-    pub(crate) client_sert_name: Option<PathBuf>,
-    pub(crate) client_priv_name: Option<PathBuf>,
+    pub(crate) server_ca_certs: Vec<PathBuf>,
+    pub(crate) server_cert_chain: Vec<PathBuf>,
+    pub(crate) server_key: Option<PathBuf>,
+    pub(crate) client_ca_certs: Vec<PathBuf>,
+    pub(crate) client_cert_chain: Vec<PathBuf>,
+    pub(crate) client_key: Option<PathBuf>,
 }
 
 impl Default for RaftConfig {

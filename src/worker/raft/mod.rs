@@ -21,7 +21,6 @@ use tokio::time::{Instant, sleep};
 use tracing::{info, trace, warn};
 
 use crate::config::Config;
-use crate::flags::{self, Flags};
 
 pub(crate) struct RaftWorker;
 

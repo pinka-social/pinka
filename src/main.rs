@@ -27,26 +27,38 @@ async fn main() -> Result<()> {
         },
         cluster: ClusterConfig {
             auth_cookie: "foobar".to_string(),
-            use_mtls: false,
-            cert_dir: None,
-            disable_system_root_store: false,
+            use_mtls: true,
+            pem_dir: Some("devcerts".into()),
+            ca_certs: vec!["ca_cert.pem".into()],
             servers: vec![
                 ServerConfig {
                     name: "s1".into(),
                     hostname: "localhost".into(),
                     port: 8001,
+                    server_cert_chain: vec!["s1.pem".into()],
+                    server_key: Some("s1.key".into()),
+                    client_cert_chain: vec!["s1.pem".into()],
+                    client_key: Some("s1.key".into()),
                     ..Default::default()
                 },
                 ServerConfig {
                     name: "s2".into(),
                     hostname: "localhost".into(),
                     port: 8002,
+                    server_cert_chain: vec!["s2.pem".into()],
+                    server_key: Some("s2.key".into()),
+                    client_cert_chain: vec!["s2.pem".into()],
+                    client_key: Some("s2.key".into()),
                     ..Default::default()
                 },
                 ServerConfig {
                     name: "s3".into(),
                     hostname: "localhost".into(),
                     port: 8003,
+                    server_cert_chain: vec!["s3.pem".into()],
+                    server_key: Some("s3.key".into()),
+                    client_cert_chain: vec!["s3.pem".into()],
+                    client_key: Some("s3.key".into()),
                     ..Default::default()
                 },
             ],
