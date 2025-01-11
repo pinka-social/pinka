@@ -64,6 +64,7 @@ async fn main() -> Result<()> {
                     ..Default::default()
                 },
             ],
+            reconnect_timeout_ms: 10_000,
         },
         database: DatabaseConfig {
             path: "devdb".into(),

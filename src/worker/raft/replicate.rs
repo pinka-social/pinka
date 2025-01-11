@@ -1,13 +1,15 @@
 use std::time::Duration;
 use std::{error::Error, ops::Deref};
 
+use anyhow::{Context, anyhow, bail};
+use fjall::PartitionHandle;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
-use tracing::{info, warn};
+use tokio::task::block_in_place;
+use tracing::{debug, info, warn};
 
-use crate::worker::raft::rpc::TryAdvanceCommitIndexMsg;
-
-use super::{AppendEntriesAsk, RaftMsg, RaftShared, RuntimeConfig};
+use super::log_entry::LogEntry;
+use super::{AdvanceCommitIndexMsg, AppendEntriesAsk, RaftMsg, RaftShared, RuntimeConfig};
 
 pub(super) struct ReplicateWorker;
 
@@ -30,8 +32,14 @@ pub(super) struct ReplicateState {
     /// Per-server raft state
     raft: RaftShared,
 
+    /// Parent's name
+    name: String,
+
     /// Remote server's reference
     peer: ActorRef<RaftMsg>,
+
+    /// Raft log
+    log: PartitionHandle,
 
     /// Index of the next log entry to send to that peer.
     ///
@@ -49,10 +57,14 @@ pub(super) struct ReplicateArgs {
     pub(super) config: RuntimeConfig,
     /// Per-server raft state
     pub(super) raft: RaftShared,
-    /// Parent's id
+    /// Parent's name
+    pub(super) name: String,
+    /// Parent's reference
     pub(super) parent: ActorRef<RaftMsg>,
     /// Remote server's reference
     pub(super) peer: ActorRef<RaftMsg>,
+    /// Raft log
+    pub(super) log: PartitionHandle,
     /// Index of the last entry in the leader's log.
     pub(super) last_log_index: usize,
 }
@@ -69,10 +81,12 @@ impl Actor for ReplicateWorker {
     ) -> Result<Self::State, ActorProcessingErr> {
         Ok(ReplicateState {
             myself,
+            name: args.name,
             parent: args.parent,
             config: args.config,
             raft: args.raft,
             peer: args.peer,
+            log: args.log,
             next_index: args.last_log_index + 1,
             match_index: 0,
         })
@@ -122,22 +136,29 @@ impl ReplicateState {
     }
 
     async fn append_entries(&mut self) -> Result<(), ActorProcessingErr> {
-        let prev_log_index = self.next_index - 1;
-        let prev_log_term = 0;
-        let num_entries = 0;
+        // NB: Replicate worker only runs when the parent is a Leader
+
+        let prev_log_index = self.next_index.saturating_sub(1);
+        let prev_log_term = if prev_log_index > 0 {
+            self.get_log_entry(prev_log_index)?.term
+        } else {
+            0
+        };
+        let entries = self.get_log_entries()?;
+        let num_entries = entries.len();
         let commit_index = self.raft.commit_index.min(prev_log_index + num_entries);
         let current_term = self.raft.current_term;
 
         let request = AppendEntriesAsk {
             term: current_term,
-            // FIXME
-            leader_id: self.parent.get_name().unwrap(),
+            leader_id: self.name.clone(),
             prev_log_index,
             prev_log_term,
-            entries: vec![],
+            entries,
             commit_index,
         };
 
+        debug!(peer = %self.peer.get_id(), ?request, "send append_entries");
         let call_result = ractor::call!(self.peer, RaftMsg::AppendEntries, request);
         if let Err(ref err) = call_result {
             warn!(target: "rpc", error = err as &dyn Error, "append_entries failed;");
@@ -145,6 +166,10 @@ impl ReplicateState {
         }
 
         let response = call_result.unwrap();
+        if response.term < current_term {
+            warn!(target: "raft", response = ?response, "discard stale append_entries response");
+            return Ok(());
+        }
         if response.term > current_term {
             info!(
                 target: "raft",
@@ -153,25 +178,54 @@ impl ReplicateState {
                 response.term,
                 current_term,
             );
-            // TODO ask parent to step down
+            ractor::cast!(self.parent, RaftMsg::UpdateTerm(response.term))?;
+            return Ok(());
+        }
+
+        assert_eq!(response.term, current_term);
+        if response.success {
+            self.match_index = prev_log_index + num_entries;
+
+            let msg = AdvanceCommitIndexMsg {
+                peer_id: Some(self.peer.get_name().unwrap()),
+                match_index: self.match_index,
+            };
+            ractor::cast!(self.parent, RaftMsg::AdvanceCommitIndex(msg))?;
+
+            self.next_index = self.match_index + 1;
         } else {
-            assert_eq!(response.term, current_term);
-            if response.success {
-                self.match_index = prev_log_index + num_entries;
-
-                let msg = TryAdvanceCommitIndexMsg {
-                    peer_id: Some(self.peer.get_name().unwrap()),
-                    match_index: self.match_index,
-                };
-                ractor::cast!(self.parent, RaftMsg::TryAdvanceCommitIndex(msg))?;
-
-                self.next_index = self.match_index + 1;
-            } else {
-                self.next_index = self.next_index.saturating_sub(1);
-                // TODO optimize for skipping last_log_index
-            }
+            self.next_index = self.next_index.saturating_sub(1);
+            // TODO optimize for skipping last_log_index
         }
 
         Ok(())
+    }
+
+    fn get_log_entry(&self, index: usize) -> anyhow::Result<LogEntry> {
+        block_in_place(|| {
+            self.log
+                .get(&index.to_be_bytes())
+                .context("get log entry failed")?
+                .ok_or_else(|| anyhow!("log entry index {index} does not exist"))
+                .and_then(|slice| {
+                    postcard::from_bytes::<LogEntry>(&slice)
+                        .context("failed to deserialize log entry")
+                })
+        })
+    }
+
+    fn get_log_entries(&self) -> anyhow::Result<Vec<LogEntry>> {
+        block_in_place(|| {
+            let mut entries = vec![];
+            let from = self.next_index.to_be_bytes();
+            let to = (self.next_index + 1).to_be_bytes();
+            for rkv in self.log.range(from..to) {
+                match rkv {
+                    Ok((_, v)) => entries.push(postcard::from_bytes(&v)?),
+                    Err(_) => bail!("failed to read all entries"),
+                }
+            }
+            Ok(entries)
+        })
     }
 }

@@ -1,3 +1,4 @@
+mod cluster;
 mod raft;
 mod supervisor;
 

@@ -4,8 +4,6 @@ xflags::xflags! {
     cmd flags {
         /// Launch the nth server from the config file
         optional -s, --server N: usize
-        /// Connect to peers
-        optional -c, --connect
         /// Launch server in bootstrap mode
         optional --bootstrap
     }
@@ -17,7 +15,6 @@ xflags::xflags! {
 #[derive(Debug)]
 pub struct Flags {
     pub server: Option<usize>,
-    pub connect: bool,
     pub bootstrap: bool,
 }
 

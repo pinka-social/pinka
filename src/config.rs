@@ -28,6 +28,7 @@ pub(crate) struct ClusterConfig {
     pub(crate) pem_dir: Option<PathBuf>,
     pub(crate) ca_certs: Vec<PathBuf>,
     pub(crate) servers: Vec<ServerConfig>,
+    pub(crate) reconnect_timeout_ms: u64,
 }
 
 #[derive(Clone, Default, Debug, Deserialize)]
