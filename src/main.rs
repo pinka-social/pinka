@@ -2,9 +2,12 @@ mod config;
 mod flags;
 mod worker;
 
+use std::fs::File;
 use std::process::exit;
 
 use anyhow::Result;
+use fd_lock::RwLock;
+use fjall::{KvSeparationOptions, PartitionCreateOptions};
 use ractor::Actor;
 use tokio::signal::unix::{SignalKind, signal};
 use tracing::info;
@@ -12,14 +15,15 @@ use tracing::info;
 use self::config::{
     ClusterConfig, Config, DatabaseConfig, RaftConfig, RuntimeConfig, ServerConfig,
 };
-use self::flags::Flags;
+use self::flags::{Dump, Pinka, PinkaCmd, RaftCmd, Serve};
 use self::worker::Supervisor;
+use self::worker::raft::LogEntry;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
-    let flags = Flags::from_env_or_exit();
+    let flags = Pinka::from_env_or_exit();
 
     let config = Config {
         raft: RaftConfig {
@@ -80,19 +84,48 @@ async fn main() -> Result<()> {
         exit(1);
     }
 
-    let keyspace = fjall::Config::new(
-        config
-            .database
-            .path
-            .join(&config.cluster.servers[flags.server.unwrap_or_default()].name),
-    )
-    .open()?;
+    let server = config.cluster.servers[flags.server.unwrap_or_default()].clone();
+
+    let keyspace_name = config.database.path.join(&server.name);
+    let mut keyspace_lock = RwLock::new(File::create(keyspace_name.join("lock"))?);
+    let write_guard = match keyspace_lock.try_write() {
+        Ok(guard) => guard,
+        Err(_) => {
+            tracing::error!(
+                "Database '{}' cannot be accessed because it is locked by another process.",
+                keyspace_name.display()
+            );
+            tracing::error!(
+                "If you are certain no other process is using this database, delete '{}' to remove the lock file.",
+                keyspace_name.join("lock").display()
+            );
+            exit(1);
+        }
+    };
+
+    let keyspace = fjall::Config::new(config.database.path.join(&server.name)).open()?;
 
     let config = RuntimeConfig {
         init: config,
+        server,
         keyspace,
     };
 
+    match flags.subcommand {
+        PinkaCmd::Serve(flags) => serve(config, flags).await?,
+        PinkaCmd::Raft(raft) => match raft.subcommand {
+            RaftCmd::Dump(flags) => {
+                raft_dump(config, flags)?;
+            }
+        },
+    }
+
+    drop(write_guard);
+
+    Ok(())
+}
+
+async fn serve(config: RuntimeConfig, flags: Serve) -> Result<()> {
     let (supervisor, actor_handle) =
         Actor::spawn(Some("supervisor".into()), Supervisor, (flags, config)).await?;
 
@@ -115,5 +148,27 @@ async fn main() -> Result<()> {
     supervisor.stop(None);
     actor_handle.await?;
 
+    Ok(())
+}
+
+fn raft_dump(config: RuntimeConfig, flags: Dump) -> Result<()> {
+    let log = config.keyspace.open_partition(
+        "raft_log",
+        PartitionCreateOptions::default()
+            .compression(fjall::CompressionType::Lz4)
+            .manual_journal_persist(true)
+            .with_kv_separation(KvSeparationOptions::default()),
+    )?;
+    info!("Dump raft log entries");
+    info!("=====================");
+    for entry in log.iter().skip(flags.from.unwrap_or_default()) {
+        let (key, value) = entry.unwrap();
+        let value: LogEntry = postcard::from_bytes(&value).unwrap();
+        info!(
+            "key = {}, value = {:?}",
+            usize::from_be_bytes(key.as_ref().try_into().unwrap()),
+            value
+        );
+    }
     Ok(())
 }

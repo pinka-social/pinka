@@ -54,6 +54,7 @@ pub(crate) struct DatabaseConfig {
 #[derive(Clone)]
 pub(crate) struct RuntimeConfig {
     pub(crate) init: Config,
+    pub(crate) server: ServerConfig,
     pub(crate) keyspace: Keyspace,
 }
 

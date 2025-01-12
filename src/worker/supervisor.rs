@@ -3,7 +3,7 @@ use ractor_cluster::RactorMessage;
 use tracing::info;
 
 use crate::config::{RuntimeConfig, ServerConfig};
-use crate::flags::Flags;
+use crate::flags::Serve;
 use crate::worker::cluster::ClusterMaintMsg;
 
 use super::cluster::ClusterMaint;
@@ -24,16 +24,15 @@ pub(crate) struct SupervisorState {
 impl Actor for Supervisor {
     type Msg = SupervisorMsg;
     type State = SupervisorState;
-    type Arguments = (Flags, RuntimeConfig);
+    type Arguments = (Serve, RuntimeConfig);
 
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let flags = &args.0;
         let config = args.1.clone();
-        let server = config.init.cluster.servers[flags.server.unwrap_or_default()].clone();
+        let server = config.server.clone();
 
         Actor::spawn_linked(
             Some("cluster_maint".into()),

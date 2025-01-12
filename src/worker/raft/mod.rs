@@ -6,7 +6,7 @@ use std::error::Error;
 use std::ops::Deref;
 use std::time::Duration;
 
-use self::log_entry::{LogEntry, LogEntryValue};
+pub(crate) use self::log_entry::{LogEntry, LogEntryValue};
 use self::replicate::{ReplicateArgs, ReplicateMsg, ReplicateWorker};
 
 use anyhow::{Context, anyhow};
@@ -337,19 +337,6 @@ impl RaftState {
             self.last_log_index = last_log.index;
             self.last_log_term = last_log.term;
         }
-
-        // block_in_place(|| {
-        //     info!("dump log entries");
-        //     for entry in self.log.iter() {
-        //         let (key, value) = entry.unwrap();
-        //         let value: LogEntry = postcard::from_bytes(&value).unwrap();
-        //         info!(
-        //             "key = {}, value = {:?}",
-        //             usize::from_be_bytes(key.as_ref().try_into().unwrap()),
-        //             value
-        //         );
-        //     }
-        // });
 
         Ok(())
     }
