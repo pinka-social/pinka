@@ -28,6 +28,7 @@ pub(crate) struct ClusterConfig {
     pub(crate) pem_dir: Option<PathBuf>,
     pub(crate) ca_certs: Vec<PathBuf>,
     pub(crate) servers: Vec<ServerConfig>,
+    pub(crate) manholes: Vec<ManholeConfig>,
     pub(crate) reconnect_timeout_ms: u64,
 }
 
@@ -51,11 +52,26 @@ pub(crate) struct DatabaseConfig {
     pub(crate) path: PathBuf,
 }
 
+#[derive(Clone, Default, Debug, Deserialize)]
+#[serde(default)]
+pub(crate) struct ManholeConfig {
+    pub(crate) server_name: String,
+    pub(crate) auth_cookie: String,
+    pub(crate) port: u16,
+    pub(crate) enable: bool,
+}
+
 #[derive(Clone)]
 pub(crate) struct RuntimeConfig {
     pub(crate) init: Config,
     pub(crate) server: ServerConfig,
     pub(crate) keyspace: Keyspace,
+}
+
+#[derive(Clone)]
+pub(crate) struct ReplConfig {
+    pub(crate) init: Config,
+    pub(crate) server: ServerConfig,
 }
 
 impl Default for RaftConfig {

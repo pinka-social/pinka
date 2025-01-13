@@ -5,8 +5,10 @@ use tracing::info;
 use crate::config::{RuntimeConfig, ServerConfig};
 use crate::flags::Serve;
 use crate::worker::cluster::ClusterMaintMsg;
+use crate::worker::manhole::ManholeMsg;
 
 use super::cluster::ClusterMaint;
+use super::manhole::Manhole;
 use super::raft::{RaftMsg, RaftWorker};
 
 pub(crate) struct Supervisor;
@@ -37,6 +39,14 @@ impl Actor for Supervisor {
         Actor::spawn_linked(
             Some("cluster_maint".into()),
             ClusterMaint,
+            (server.clone(), config.clone()),
+            myself.get_cell(),
+        )
+        .await?;
+
+        Actor::spawn_linked(
+            Some("manhole".into()),
+            Manhole,
             (server.clone(), config.clone()),
             myself.get_cell(),
         )
@@ -86,6 +96,16 @@ impl Actor for Supervisor {
                     Actor::spawn_linked(
                         Some("cluster_maint".into()),
                         ClusterMaint,
+                        (state.server.clone(), state.config.clone()),
+                        myself.get_cell(),
+                    )
+                    .await?;
+                }
+                if matches!(actor_cell.is_message_type_of::<ManholeMsg>(), Some(true)) {
+                    info!(target: "supervision", error, "manhole crashed, restarting...");
+                    Actor::spawn_linked(
+                        Some("manhole".into()),
+                        Manhole,
                         (state.server.clone(), state.config.clone()),
                         myself.get_cell(),
                     )

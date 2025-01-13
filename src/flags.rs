@@ -15,6 +15,7 @@ xflags::xflags! {
                 optional --from index: usize
             }
         }
+        cmd repl {}
     }
 }
 
@@ -31,6 +32,7 @@ pub struct Pinka {
 pub enum PinkaCmd {
     Serve(Serve),
     Raft(Raft),
+    Repl(Repl),
 }
 
 #[derive(Debug)]
@@ -52,6 +54,9 @@ pub enum RaftCmd {
 pub struct Dump {
     pub from: Option<usize>,
 }
+
+#[derive(Debug)]
+pub struct Repl;
 
 impl Pinka {
     #[allow(dead_code)]

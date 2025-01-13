@@ -1,5 +1,6 @@
 mod config;
 mod flags;
+mod repl;
 mod worker;
 
 use std::fs::File;
@@ -13,7 +14,8 @@ use tokio::signal::unix::{SignalKind, signal};
 use tracing::info;
 
 use self::config::{
-    ClusterConfig, Config, DatabaseConfig, RaftConfig, RuntimeConfig, ServerConfig,
+    ClusterConfig, Config, DatabaseConfig, ManholeConfig, RaftConfig, ReplConfig, RuntimeConfig,
+    ServerConfig,
 };
 use self::flags::{Dump, Pinka, PinkaCmd, RaftCmd, Serve};
 use self::worker::Supervisor;
@@ -68,6 +70,12 @@ async fn main() -> Result<()> {
                     ..Default::default()
                 },
             ],
+            manholes: vec![ManholeConfig {
+                server_name: "s1".into(),
+                auth_cookie: "".into(),
+                port: 9001,
+                enable: true,
+            }],
             reconnect_timeout_ms: 10_000,
         },
         database: DatabaseConfig {
@@ -85,6 +93,15 @@ async fn main() -> Result<()> {
     }
 
     let server = config.cluster.servers[flags.server.unwrap_or_default()].clone();
+
+    if matches!(flags.subcommand, PinkaCmd::Repl(_)) {
+        let repl_config = ReplConfig {
+            init: config,
+            server,
+        };
+        repl::run(repl_config).await?;
+        return Ok(());
+    }
 
     let keyspace_name = config.database.path.join(&server.name);
     let mut keyspace_lock = RwLock::new(File::create(keyspace_name.join("lock"))?);
@@ -118,6 +135,7 @@ async fn main() -> Result<()> {
                 raft_dump(config, flags)?;
             }
         },
+        _ => {}
     }
 
     drop(write_guard);

@@ -1,15 +1,16 @@
 mod log_entry;
 mod replicate;
 
+pub(crate) use self::log_entry::{LogEntry, LogEntryList, LogEntryValue};
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::ops::Deref;
 use std::time::Duration;
 
-pub(crate) use self::log_entry::{LogEntry, LogEntryValue};
 use self::replicate::{ReplicateArgs, ReplicateMsg, ReplicateWorker};
 
-use anyhow::{Context, anyhow};
+use anyhow::{Context, Result, anyhow};
 use fjall::{KvSeparationOptions, PartitionCreateOptions, PartitionHandle};
 use ractor::{
     Actor, ActorProcessingErr, ActorRef, BytesConvertable, RpcReplyPort, SupervisionEvent, pg,
@@ -36,6 +37,9 @@ pub(super) enum RaftMsg {
     AppendEntries(AppendEntriesAsk, RpcReplyPort<AppendEntriesReply>),
     RequestVote(RequestVoteAsk),
     RequestVoteResponse(RequestVoteReply),
+    // TODO: add status code
+    #[rpc]
+    ClientRequest(LogEntryValue, RpcReplyPort<bool>),
 }
 
 /// Role played by the worker.
@@ -240,6 +244,9 @@ impl Actor for RaftWorker {
             UpdateTerm(new_term) => {
                 state.update_term(new_term).await?;
             }
+            ClientRequest(request, reply) => {
+                state.handle_client_request(request, reply).await?;
+            }
         }
 
         Ok(())
@@ -414,7 +421,11 @@ impl RaftState {
             self.config.init.raft.min_election_ms..=self.config.init.raft.max_election_ms,
         ));
 
-        debug!("will start election in {:?}", duration);
+        debug_assert!(matches!(
+            self.role,
+            RaftRole::Follower | RaftRole::Candidate
+        ));
+        debug!(target: "raft", "will start election in {:?}", duration);
 
         match &self.election_timer {
             Some(timer) if !timer.is_closed() => {
@@ -427,6 +438,7 @@ impl RaftState {
     }
 
     fn unset_election_timer(&mut self) {
+        info!(target: "raft", "unset election timer");
         self.election_timer = None;
     }
 
@@ -758,7 +770,40 @@ impl RaftState {
         Ok(())
     }
 
-    fn get_last_log_entry(&self) -> anyhow::Result<LogEntry> {
+    async fn handle_client_request(
+        &mut self,
+        request: LogEntryValue,
+        reply: RpcReplyPort<bool>,
+    ) -> Result<()> {
+        if matches!(self.role, RaftRole::Leader) {
+            self.append_log(request)?;
+            reply.send(true)?;
+            return Ok(());
+        }
+        // Forward to leader
+        if let Some(leader) = self.get_leader() {
+            reply.send(ractor::call!(leader, RaftMsg::ClientRequest, request)?)?;
+            return Ok(());
+        }
+        reply.send(false)?;
+        Ok(())
+    }
+
+    fn get_leader(&self) -> Option<ActorRef<RaftMsg>> {
+        if matches!(self.role, RaftRole::Leader) {
+            return Some(self.myself.clone());
+        }
+        if let Some(leader_id) = &self.leader_id {
+            for server in pg::get_scoped_members(&"raft".into(), &RaftWorker::pg_name()) {
+                if server.get_name().as_ref() == Some(leader_id) {
+                    return Some(server.into());
+                }
+            }
+        }
+        None
+    }
+
+    fn get_last_log_entry(&self) -> Result<LogEntry> {
         block_in_place(|| {
             self.log
                 .last_key_value()
@@ -771,7 +816,7 @@ impl RaftState {
         })
     }
 
-    fn get_log_entry(&self, index: usize) -> anyhow::Result<LogEntry> {
+    fn get_log_entry(&self, index: usize) -> Result<LogEntry> {
         block_in_place(|| {
             self.log
                 .get(&index.to_be_bytes())
@@ -784,7 +829,7 @@ impl RaftState {
         })
     }
 
-    fn append_log(&mut self, value: LogEntryValue) -> Result<(), ActorProcessingErr> {
+    fn append_log(&mut self, value: LogEntryValue) -> Result<()> {
         let index = self.last_log_index + 1;
         let new_log_entry = LogEntry {
             index,
@@ -792,7 +837,7 @@ impl RaftState {
             value,
         };
         let value_bytes = postcard::to_stdvec(&new_log_entry)?;
-        block_in_place(|| -> anyhow::Result<()> {
+        block_in_place(|| -> Result<()> {
             self.log.insert(&index.to_be_bytes(), value_bytes)?;
             self.config.keyspace.persist(fjall::PersistMode::SyncAll)?;
             Ok(())
@@ -803,7 +848,7 @@ impl RaftState {
     }
 
     fn replicate_log_entries(&mut self, entries: &[LogEntry]) -> Result<(), ActorProcessingErr> {
-        block_in_place(|| -> anyhow::Result<()> {
+        block_in_place(|| -> Result<()> {
             for entry in entries {
                 let value_bytes = postcard::to_stdvec(entry)?;
                 self.log.insert(&entry.index.to_be_bytes(), value_bytes)?;
@@ -922,3 +967,5 @@ impl_bytes_convertable_for_serde!(AppendEntriesReply);
 impl_bytes_convertable_for_serde!(RequestVoteAsk);
 impl_bytes_convertable_for_serde!(RequestVoteReply);
 impl_bytes_convertable_for_serde!(LogEntry);
+impl_bytes_convertable_for_serde!(LogEntryValue);
+impl_bytes_convertable_for_serde!(LogEntryList);

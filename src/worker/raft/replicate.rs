@@ -6,7 +6,7 @@ use fjall::PartitionHandle;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
 use tokio::task::block_in_place;
-use tracing::{debug, info, warn};
+use tracing::{info, trace, warn};
 
 use super::log_entry::LogEntry;
 use super::{AdvanceCommitIndexMsg, AppendEntriesAsk, RaftMsg, RaftShared, RuntimeConfig};
@@ -158,7 +158,7 @@ impl ReplicateState {
             commit_index,
         };
 
-        debug!(peer = %self.peer.get_id(), ?request, "send append_entries");
+        trace!(peer = %self.peer.get_id(), ?request, "send append_entries");
         let call_result = ractor::call!(self.peer, RaftMsg::AppendEntries, request);
         if let Err(ref err) = call_result {
             warn!(target: "rpc", error = err as &dyn Error, "append_entries failed;");
