@@ -1,7 +1,7 @@
+use std::ops::Deref;
 use std::time::Duration;
-use std::{error::Error, ops::Deref};
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use fjall::PartitionHandle;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
@@ -98,7 +98,8 @@ impl Actor for ReplicateWorker {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         info!(target: "lifecycle", "started");
-        state.run_loop().await
+        state.run_loop().await?;
+        Ok(())
     }
 
     async fn handle(
@@ -128,14 +129,14 @@ impl Deref for ReplicateState {
 }
 
 impl ReplicateState {
-    async fn run_loop(&mut self) -> Result<(), ActorProcessingErr> {
+    async fn run_loop(&mut self) -> Result<()> {
         self.append_entries().await?;
         let next_heartbeat = Duration::from_millis(self.config.init.raft.heartbeat_ms);
         self.send_after(next_heartbeat, || ReplicateMsg::RunLoop);
         Ok(())
     }
 
-    async fn append_entries(&mut self) -> Result<(), ActorProcessingErr> {
+    async fn append_entries(&mut self) -> Result<()> {
         // NB: Replicate worker only runs when the parent is a Leader
 
         let prev_log_index = self.next_index.saturating_sub(1);
@@ -158,22 +159,30 @@ impl ReplicateState {
             commit_index,
         };
 
-        trace!(peer = %self.peer.get_id(), ?request, "send append_entries");
+        trace!(
+            target: "raft",
+            peer = %self.peer.get_id(),
+            ?request,
+            "send append_entries"
+        );
         let call_result = ractor::call!(self.peer, RaftMsg::AppendEntries, request);
-        if let Err(ref err) = call_result {
-            warn!(target: "rpc", error = err as &dyn Error, "append_entries failed;");
+        if let Err(error) = call_result {
+            warn!(target: "rpc", %error, "append_entries failed;");
             return Ok(());
         }
 
         let response = call_result.unwrap();
         if response.term < current_term {
-            warn!(target: "raft", response = ?response, "discard stale append_entries response");
+            warn!(target: "raft", term = response.term, "discard stale append_entries response");
             return Ok(());
         }
         if response.term > current_term {
             info!(
                 target: "raft",
-                "received AppendEntries response from server {} in term {} (this server's term was {})",
+                peer = %self.peer.get_id(),
+                response_term = response.term,
+                current_term,
+                "received append_entries response from server {} in term {} (this server's term was {})",
                 self.peer.get_id(),
                 response.term,
                 current_term,

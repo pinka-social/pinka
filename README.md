@@ -6,8 +6,8 @@
         - [x] AppendEntries RPC
         - [x] RequestVote RPC
     - [x] Remote servers
-    - [ ] Log replication
-    - [ ] Client request forwarding
+    - [x] Log replication
+    - [x] Client request forwarding
     - [ ] Cluster changes
     - [ ] Graceful shutdown
 - [ ] Activity Streams data models

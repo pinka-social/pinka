@@ -55,7 +55,7 @@ impl Actor for Supervisor {
         Actor::spawn_linked(
             Some(server.name.clone()),
             RaftWorker,
-            (args.0.bootstrap, config.clone()),
+            config.clone(),
             myself.get_cell(),
         )
         .await?;
@@ -116,7 +116,7 @@ impl Actor for Supervisor {
                     Actor::spawn_linked(
                         Some(state.server.name.clone()),
                         RaftWorker,
-                        (false, state.config.clone()),
+                        state.config.clone(),
                         myself.into(),
                     )
                     .await?;

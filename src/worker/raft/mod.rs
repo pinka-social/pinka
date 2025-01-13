@@ -155,14 +155,14 @@ impl RaftWorker {
 impl Actor for RaftWorker {
     type Msg = RaftMsg;
     type State = RaftState;
-    type Arguments = (bool, RuntimeConfig);
+    type Arguments = RuntimeConfig;
 
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let (bootstrap, config) = args;
+        let config = args;
 
         let log = block_in_place(|| {
             config.keyspace.open_partition(
@@ -184,15 +184,7 @@ impl Actor for RaftWorker {
         })?;
 
         let mut state = RaftState::new(myself, config, log, restore);
-
-        if bootstrap {
-            // TODO: should we disallow bootstrap twice?
-            info!(target: "spawn", "in bootstrap mode, assume leader's role");
-            state.role = RaftRole::Leader;
-        } else {
-            // Restore state
-            state.restore_state().await?;
-        }
+        state.restore_state().await?;
 
         Ok(state)
     }
@@ -202,13 +194,13 @@ impl Actor for RaftWorker {
         myself: ActorRef<Self::Msg>,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        info!(target: "lifecycle", "started");
+        info!(target: "lifecycle", "raft_worker started");
 
         pg::join_scoped("raft".into(), RaftWorker::pg_name(), vec![
             myself.get_cell(),
         ]);
         pg::monitor_scope("raft".into(), myself.get_cell());
-        info!(target: "lifecycle", "joined process group");
+        info!(target: "lifecycle", "joined raft process group");
 
         if !matches!(state.role, RaftRole::Leader) {
             state.set_election_timer();
@@ -282,11 +274,11 @@ fn election_timer(myself: ActorRef<RaftMsg>, timeout: Duration) -> Sender<Durati
                     }
                 }
                 _ = &mut sleep => {
-                    if let Err(ref err) = ractor::cast!(myself, RaftMsg::ElectionTimeout) {
+                    if let Err(ref error) = ractor::cast!(myself, RaftMsg::ElectionTimeout) {
                         warn!(
                             target: "raft",
                             myself = %myself.get_id(),
-                            error = err as &dyn Error,
+                            %error,
                             "failed to send election timeout"
                         );
                     }
@@ -327,20 +319,31 @@ impl RaftState {
     }
 
     fn peer_id(&self) -> PeerId {
-        self.get_name().unwrap()
+        self.get_name()
+            .expect("raft_worker should have name=server_name")
     }
 
-    async fn restore_state(&mut self) -> Result<(), ActorProcessingErr> {
+    async fn restore_state(&mut self) -> Result<()> {
         let saved: RaftSaved = block_in_place(|| match self.restore.get("raft_saved") {
             Ok(Some(value)) => postcard::from_bytes(&value),
             _ => Ok(RaftSaved::default()),
         })?;
-        info!(saved.current_term, saved.voted_for, "restored from state");
+        info!(
+            target: "raft",
+            current_term = saved.current_term,
+            voted_for = saved.voted_for,
+            "restored from state"
+        );
         self.current_term = saved.current_term;
         self.voted_for = saved.voted_for;
 
         if let Ok(last_log) = self.get_last_log_entry() {
-            info!(last_log.index, last_log.term, "restored from log");
+            info!(
+                target: "raft",
+                last_log_index = last_log.index,
+                last_log_term = last_log.term,
+                "restored from log"
+            );
             self.last_log_index = last_log.index;
             self.last_log_term = last_log.term;
         }
@@ -348,7 +351,7 @@ impl RaftState {
         Ok(())
     }
 
-    async fn persist_state(&mut self) -> Result<(), ActorProcessingErr> {
+    async fn persist_state(&mut self) -> Result<()> {
         let saved = RaftSaved {
             current_term: self.current_term,
             voted_for: self.voted_for.clone(),
@@ -371,14 +374,14 @@ impl RaftState {
         Ok(())
     }
 
-    async fn spawn_replicate_workers(&mut self) -> Result<(), ActorProcessingErr> {
+    async fn spawn_replicate_workers(&mut self) -> Result<()> {
         assert!(self.replicate_workers.is_empty());
 
         for server in pg::get_scoped_members(&"raft".into(), &RaftWorker::pg_name()) {
             if server.get_name() == self.get_name() {
                 continue;
             }
-            info!(peer = %server.get_id(), "spawn replicate worker");
+            info!(target: "raft", peer = %server.get_id(), "spawn replicate worker");
             let args = ReplicateArgs {
                 config: self.config.clone(),
                 raft: RaftShared {
@@ -395,7 +398,6 @@ impl RaftState {
                 Actor::spawn_linked(None, ReplicateWorker, args, self.get_cell()).await?;
             self.replicate_workers.push(peer);
         }
-        info!(workers = ?self.replicate_workers);
         Ok(())
     }
 
@@ -442,31 +444,27 @@ impl RaftState {
         self.election_timer = None;
     }
 
-    async fn start_new_election(&mut self) -> Result<(), ActorProcessingErr> {
+    async fn start_new_election(&mut self) -> Result<()> {
         if matches!(self.role, RaftRole::Leader) {
             warn!(target: "raft", "starting a election as a leader");
         }
-        if let Some(ref leader_id) = self.leader_id {
+        if let Some(leader_id) = &self.leader_id {
             info!(
                 target: "raft",
-                myself = %self.get_id(),
-                term = self.current_term + 1,
                 prev_leader_id = %leader_id,
+                new_term = self.current_term + 1,
                 "running for election (unresponsive leader)"
             );
         } else if matches!(self.role, RaftRole::Candidate) {
             info!(
                 target: "raft",
-                myself = %self.get_id(),
-                term = self.current_term + 1,
-                prev_term = self.current_term,
+                new_term = self.current_term + 1,
                 "running for election (previous candidacy timed out)"
             );
         } else {
             info!(
                 target: "raft",
-                myself = %self.get_id(),
-                term = self.current_term + 1,
+                new_term = self.current_term + 1,
                 "running for election"
             );
         }
@@ -490,22 +488,21 @@ impl RaftState {
 
             let request = RequestVoteAsk {
                 term: self.current_term,
-                candidate_name: self.get_name().unwrap(),
+                candidate_name: self.peer_id(),
                 last_log_index: self.last_log_index,
                 last_log_term: self.last_log_term,
             };
 
             info!(
                 target: "raft",
-                from = %self.peer_id(),
                 to = %peer.get_name().unwrap(),
-                req = ?request,
+                term = request.term,
                 "request_vote"
             );
 
             let call_result = ractor::cast!(peer, RaftMsg::RequestVote(request));
-            if let Err(ref err) = call_result {
-                warn!(target: "rpc", error = err as &dyn Error, "request_vote failed");
+            if let Err(error) = call_result {
+                warn!(target: "rpc", %error, "request_vote failed");
             }
         }
     }
@@ -515,7 +512,7 @@ impl RaftState {
             panic!("simulated crash");
         }
         if !matches!(self.role, RaftRole::Leader) {
-            warn!(target: "raft", "try_advance_commit_index called as {:?}", self.role);
+            warn!(target: "raft", "advance_commit_index called as {:?}", self.role);
             return;
         }
         if let Some(peer_id) = peer_info.peer_id {
@@ -527,15 +524,9 @@ impl RaftState {
         }
         // At least one log entry must be from the current term to guarantee
         // that no server without them can be elected.
-        let log_entry = block_in_place(|| {
-            self.log
-                .get(&new_commit_index.to_be_bytes())
-                .map(|maybe_slice| {
-                    maybe_slice.map(|slice| postcard::from_bytes::<LogEntry>(&slice))
-                })
-        });
-        if let Ok(Some(Ok(value))) = log_entry {
-            if value.term == self.current_term {
+        let log_entry = self.get_log_entry(new_commit_index);
+        if let Ok(entry) = log_entry {
+            if entry.term == self.current_term {
                 self.commit_index = new_commit_index;
                 trace!(target: "raft", "new commit_index: {}", self.commit_index);
                 self.notify_state_change();
@@ -543,15 +534,12 @@ impl RaftState {
         }
     }
 
-    async fn handle_request_vote(
-        &mut self,
-        request: RequestVoteAsk,
-    ) -> Result<(), ActorProcessingErr> {
+    async fn handle_request_vote(&mut self, request: RequestVoteAsk) -> Result<()> {
         info!(
             target: "raft",
-            ?request,
-            myself = %self.peer_id(),
+            candidate = request.candidate_name,
             current_term = self.current_term,
+            request_term = request.term,
             "received request for vote"
         );
         // TODO ignore distrubing request_vote
@@ -564,9 +552,7 @@ impl RaftState {
         if request.term == self.current_term && log_ok && self.voted_for.is_none() {
             info!(
                 target: "raft",
-                myself = %self.peer_id(),
-                peer = %request.candidate_name,
-                current_term = self.current_term,
+                candidate = request.candidate_name,
                 "voted"
             );
             // Step down if we are not voting for ourselves
@@ -586,11 +572,10 @@ impl RaftState {
                     vote_from: self.peer_id(),
                 };
                 let server: ActorRef<RaftMsg> = server.into();
-                if let Err(ref err) = ractor::cast!(server, RaftMsg::RequestVoteResponse(response))
-                {
+                if let Err(error) = ractor::cast!(server, RaftMsg::RequestVoteResponse(response)) {
                     warn!(
-                        error = err as &dyn Error,
-                        peer = %request.candidate_name,
+                        candidate = request.candidate_name,
+                        %error,
                         "sending request vote reply failed"
                     );
                 }
@@ -605,15 +590,11 @@ impl RaftState {
         &mut self,
         request: AppendEntriesAsk,
         reply: RpcReplyPort<AppendEntriesReply>,
-    ) -> Result<(), ActorProcessingErr> {
+    ) -> Result<()> {
         self.update_term(request.term).await?;
-        self.set_election_timer();
 
-        if self.leader_id.is_none() {
-            self.leader_id = Some(request.leader_id.clone());
-            info!(target: "raft", "recognized new leader {} for term {}", request.leader_id, self.current_term);
-        } else {
-            debug_assert_eq!(self.leader_id, Some(request.leader_id.clone()));
+        if self.leader_id.is_some() {
+            self.set_election_timer();
         }
 
         assert!(request.term <= self.current_term);
@@ -634,16 +615,28 @@ impl RaftState {
         {
             trace!(
                 target: "raft",
-                "received stale request from server {} in term {} (this server's term was {}",
+                server = request.leader_id,
+                term = request.term,
+                "discard stale append_entries request from server {} in term {} (this server's term was {}",
                 request.leader_id,
                 request.term,
                 self.get_id()
             );
             // reject request
-            if let Err(ref err) = reply.send(response) {
-                warn!(target: "rpc", error = err as &dyn Error, "send response to append_entries failed");
+            if let Err(error) = reply.send(response) {
+                warn!(target: "rpc", %error, "send response to append_entries failed");
             }
             return Ok(());
+        }
+
+        if self.leader_id.is_none() {
+            self.leader_id = Some(request.leader_id.clone());
+            info!(
+                target: "raft",
+                leader = request.leader_id,
+                term = self.current_term,
+                "recognized new leader",
+            );
         }
 
         let index = request.prev_log_index + 1;
@@ -654,8 +647,10 @@ impl RaftState {
             // already done with request
             self.commit_index = request.commit_index;
             response.success = true;
-            if let Err(ref err) = reply.send(response) {
-                warn!(target: "rpc", error = err as &dyn Error, "send response to append_entries failed");
+            self.set_election_timer();
+
+            if let Err(error) = reply.send(response) {
+                warn!(target: "rpc", %error, "send response to append_entries failed");
             }
             return Ok(());
         }
@@ -667,8 +662,8 @@ impl RaftState {
             self.remove_last_log_entry()?;
             self.set_election_timer();
 
-            if let Err(ref err) = reply.send(response) {
-                warn!(target: "rpc", error = err as &dyn Error, "send response to append_entries failed");
+            if let Err(error) = reply.send(response) {
+                warn!(target: "rpc", %error, "send response to append_entries failed");
             }
             return Ok(());
         }
@@ -676,8 +671,8 @@ impl RaftState {
             self.replicate_log_entries(&request.entries)?;
             response.success = true;
             self.set_election_timer();
-            if let Err(ref err) = reply.send(response) {
-                warn!(target: "rpc", error = err as &dyn Error, "send response to append_entries failed");
+            if let Err(error) = reply.send(response) {
+                warn!(target: "rpc", %error, "send response to append_entries failed");
             }
             return Ok(());
         }
@@ -685,14 +680,11 @@ impl RaftState {
         Ok(())
     }
 
-    async fn handle_request_vote_response(
-        &mut self,
-        response: RequestVoteReply,
-    ) -> Result<(), ActorProcessingErr> {
+    async fn handle_request_vote_response(&mut self, response: RequestVoteReply) -> Result<()> {
         self.update_term(response.term).await?;
 
         if response.term < self.current_term {
-            warn!(target: "raft", response = ?response, "discard stale vote response");
+            warn!(target: "raft", peer = response.vote_from, "discard stale vote response");
             return Ok(());
         }
 
@@ -700,8 +692,7 @@ impl RaftState {
             if response.vote_granted {
                 info!(
                     target: "raft",
-                    myself = %self.peer_id(),
-                    peer = %response.vote_from,
+                    peer = response.vote_from,
                     peer_term = response.term,
                     current_term = self.current_term,
                     "got one vote",
@@ -710,23 +701,22 @@ impl RaftState {
                     if matches!(self.role, RaftRole::Follower) {
                         warn!(
                             target: "raft",
-                            peer = %response.vote_from,
-                            myself = %self.get_id(),
-                            role = ?self.role,
+                            peer = response.vote_from,
+                            current_role = ?self.role,
                             "received vote but not a candidate"
                         );
                     }
                     return Ok(());
                 }
                 self.votes_received.insert(response.vote_from);
-                warn!("election poll {:?}", self.votes_received);
+                info!(target: "raft", result = ?self.votes_received, "election poll");
                 if self.voted_has_quorum() {
                     self.become_leader().await?;
                 }
             } else {
                 info!(
                     target: "raft",
-                    peer = %response.vote_from,
+                    peer = response.vote_from,
                     peer_term = response.term,
                     current_term = self.current_term,
                     "vote was denied",
@@ -736,10 +726,13 @@ impl RaftState {
         Ok(())
     }
 
-    async fn become_leader(&mut self) -> Result<(), ActorProcessingErr> {
+    async fn become_leader(&mut self) -> Result<()> {
         assert!(matches!(self.role, RaftRole::Candidate));
         info!(target: "raft", "received quorum, becoming leader");
         self.role = RaftRole::Leader;
+        self.leader_id = None;
+        self.voted_for = None;
+        self.persist_state().await?;
         self.unset_election_timer();
         self.reset_match_index();
         self.append_log(LogEntryValue::NewTermStarted)?;
@@ -747,7 +740,7 @@ impl RaftState {
         Ok(())
     }
 
-    async fn update_term(&mut self, new_term: u32) -> Result<(), ActorProcessingErr> {
+    async fn update_term(&mut self, new_term: u32) -> Result<()> {
         if new_term <= self.current_term {
             return Ok(());
         }
@@ -763,7 +756,7 @@ impl RaftState {
         self.persist_state().await?;
 
         if was_leader || self.election_timer.is_none() {
-            warn!("stepping down");
+            info!(target: "raft", "stepping down");
             self.set_election_timer();
         }
 
@@ -847,7 +840,7 @@ impl RaftState {
         Ok(())
     }
 
-    fn replicate_log_entries(&mut self, entries: &[LogEntry]) -> Result<(), ActorProcessingErr> {
+    fn replicate_log_entries(&mut self, entries: &[LogEntry]) -> Result<()> {
         block_in_place(|| -> Result<()> {
             for entry in entries {
                 let value_bytes = postcard::to_stdvec(entry)?;
@@ -861,7 +854,7 @@ impl RaftState {
         Ok(())
     }
 
-    fn remove_last_log_entry(&mut self) -> Result<(), ActorProcessingErr> {
+    fn remove_last_log_entry(&mut self) -> Result<()> {
         block_in_place(|| self.log.remove(&self.last_log_index.to_be_bytes()))?;
         self.last_log_index -= 1;
         self.last_log_term = self.get_log_entry(self.last_log_index)?.term;

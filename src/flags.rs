@@ -5,10 +5,7 @@ xflags::xflags! {
         /// Launch the nth server from the config file
         optional -s, --server N: usize
 
-        cmd serve {
-            /// Launch server in bootstrap mode
-            optional --bootstrap
-        }
+        cmd serve {}
         cmd raft {
             cmd dump {
                 /// Start from index
@@ -36,9 +33,7 @@ pub enum PinkaCmd {
 }
 
 #[derive(Debug)]
-pub struct Serve {
-    pub bootstrap: bool,
-}
+pub struct Serve;
 
 #[derive(Debug)]
 pub struct Raft {
