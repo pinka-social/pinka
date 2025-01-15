@@ -12,6 +12,10 @@
     - [ ] Cluster changes
     - [ ] Graceful shutdown
 - [ ] Activity Streams data models
+    - [ ] JSON-LD lite
+        - [ ] Context processing
+        - [ ] Vocab store
+        - [ ] Node store
     - [ ] AS Actor
     - [ ] AS Objects
         - [ ] Article

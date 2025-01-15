@@ -1,3 +1,4 @@
+mod activity;
 mod config;
 mod flags;
 mod repl;
@@ -35,7 +36,7 @@ async fn main() -> Result<()> {
         },
         cluster: ClusterConfig {
             auth_cookie: "foobar".to_string(),
-            use_mtls: true,
+            use_mtls: false,
             pem_dir: Some("devcerts".into()),
             ca_certs: vec!["ca_cert.pem".into()],
             servers: vec![
