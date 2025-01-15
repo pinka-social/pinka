@@ -31,7 +31,7 @@ pub(super) struct RaftWorker;
 #[derive(RactorClusterMessage)]
 pub(super) enum RaftMsg {
     ElectionTimeout,
-    UpdateTerm(u32),
+    UpdateTerm(u32, PeerId),
     AdvanceCommitIndex(AdvanceCommitIndexMsg),
     #[rpc]
     AppendEntries(AppendEntriesAsk, RpcReplyPort<AppendEntriesReply>),
@@ -233,8 +233,8 @@ impl Actor for RaftWorker {
             AdvanceCommitIndex(peer_info) => {
                 state.advance_commit_index(peer_info);
             }
-            UpdateTerm(new_term) => {
-                state.update_term(new_term).await?;
+            UpdateTerm(new_term, peer_id) => {
+                state.update_term(new_term, &peer_id).await?;
             }
             ClientRequest(request, reply) => {
                 state.handle_client_request(request, reply).await?;
@@ -465,7 +465,7 @@ impl RaftState {
             info!(
                 target: "raft",
                 new_term = self.current_term + 1,
-                "running for election"
+                "running for election (there was no leader)"
             );
         }
         self.role = RaftRole::Candidate;
@@ -543,7 +543,8 @@ impl RaftState {
             "received request for vote"
         );
         // TODO ignore distrubing request_vote
-        self.update_term(request.term).await?;
+        self.update_term(request.term, &request.candidate_name)
+            .await?;
 
         let log_ok = request.last_log_term > self.last_log_term
             || (request.last_log_term == self.last_log_term
@@ -557,7 +558,8 @@ impl RaftState {
             );
             // Step down if we are not voting for ourselves
             if request.candidate_name != self.peer_id() {
-                self.update_term(self.current_term).await?;
+                self.update_term(self.current_term, &request.candidate_name)
+                    .await?;
                 self.set_election_timer();
             }
             self.voted_for = Some(request.candidate_name.clone());
@@ -591,7 +593,7 @@ impl RaftState {
         request: AppendEntriesAsk,
         reply: RpcReplyPort<AppendEntriesReply>,
     ) -> Result<()> {
-        self.update_term(request.term).await?;
+        self.update_term(request.term, &request.leader_id).await?;
 
         if self.leader_id.is_some() {
             self.set_election_timer();
@@ -627,16 +629,6 @@ impl RaftState {
                 warn!(target: "rpc", %error, "send response to append_entries failed");
             }
             return Ok(());
-        }
-
-        if self.leader_id.is_none() {
-            self.leader_id = Some(request.leader_id.clone());
-            info!(
-                target: "raft",
-                leader = request.leader_id,
-                term = self.current_term,
-                "recognized new leader",
-            );
         }
 
         let index = request.prev_log_index + 1;
@@ -681,7 +673,7 @@ impl RaftState {
     }
 
     async fn handle_request_vote_response(&mut self, response: RequestVoteReply) -> Result<()> {
-        self.update_term(response.term).await?;
+        self.update_term(response.term, &response.vote_from).await?;
 
         if response.term < self.current_term {
             warn!(target: "raft", peer = response.vote_from, "discard stale vote response");
@@ -740,7 +732,7 @@ impl RaftState {
         Ok(())
     }
 
-    async fn update_term(&mut self, new_term: u32) -> Result<()> {
+    async fn update_term(&mut self, new_term: u32, peer_id: &PeerId) -> Result<()> {
         if new_term <= self.current_term {
             return Ok(());
         }
@@ -748,12 +740,19 @@ impl RaftState {
         let was_leader = matches!(self.role, RaftRole::Leader);
 
         self.current_term = new_term;
-        self.role = RaftRole::Follower;
-        self.leader_id = None;
         self.voted_for = None;
+        self.role = RaftRole::Follower;
+        self.leader_id = Some(peer_id.to_owned());
         self.stop_children(None);
         self.replicate_workers.clear();
         self.persist_state().await?;
+
+        info!(
+            target: "raft",
+            leader = self.leader_id,
+            term = self.current_term,
+            "recognized new leader",
+        );
 
         if was_leader || self.election_timer.is_none() {
             info!(target: "raft", "stepping down");

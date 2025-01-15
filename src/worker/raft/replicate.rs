@@ -161,7 +161,7 @@ impl ReplicateState {
 
         trace!(
             target: "raft",
-            peer = %self.peer.get_id(),
+            peer = %self.peer.get_name().unwrap(),
             ?request,
             "send append_entries"
         );
@@ -179,15 +179,18 @@ impl ReplicateState {
         if response.term > current_term {
             info!(
                 target: "raft",
-                peer = %self.peer.get_id(),
+                peer = self.peer.get_name().unwrap(),
                 response_term = response.term,
                 current_term,
                 "received append_entries response from server {} in term {} (this server's term was {})",
-                self.peer.get_id(),
+                self.peer.get_name().unwrap(),
                 response.term,
                 current_term,
             );
-            ractor::cast!(self.parent, RaftMsg::UpdateTerm(response.term))?;
+            ractor::cast!(
+                self.parent,
+                RaftMsg::UpdateTerm(response.term, self.peer.get_name().unwrap())
+            )?;
             return Ok(());
         }
 
