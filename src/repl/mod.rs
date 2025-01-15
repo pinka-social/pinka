@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use anyhow::{Context, Result, bail};
 use ractor::{Actor, ActorRef};
 use ractor_cluster::NodeServer;
@@ -5,6 +7,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, stdin, stdout};
 use tokio::task::yield_now;
 use tracing::info;
 
+use crate::activity;
 use crate::config::ReplConfig;
 use crate::worker::ManholeMsg;
 
@@ -61,6 +64,15 @@ pub(super) async fn run(repl_config: ReplConfig) -> Result<()> {
                 manhole_ref(&repl_config.server.name)?,
                 ManholeMsg::AppendRaftClusterMessage(msg.into())
             )?;
+        }
+        if line.starts_with("test") {
+            let actor = activity::Actor {
+                id: "uuid".into(),
+                kind: activity::Kind::Actor(activity::ActorKind::Person),
+                name: "Tester".into(),
+                others: BTreeMap::new(),
+            };
+            info!("actor = {}", serde_json::to_string(&actor)?);
         }
         stdout.write_all(b"> ").await?;
         stdout.flush().await?;

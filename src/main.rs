@@ -1,5 +1,7 @@
+mod activity;
 mod config;
 mod flags;
+mod json_ld;
 mod repl;
 mod worker;
 
