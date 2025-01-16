@@ -12,10 +12,8 @@ futures = "0.3.31"
 postcard = { version = "1.1.1", default-features = false, features = [
     "use-std",
 ] }
-ractor = { version = "0.14.4", features = [
-    "cluster",
-], path = "../../ractor/ractor" }
-ractor_cluster = { version = "0.14.4", path = "../../ractor/ractor_cluster" }
+ractor = { version = "0.14.6", features = ["cluster"] }
+ractor_cluster = { version = "0.14.6" }
 rand = "0.8.5"
 rustls-pki-types = { version = "1.10.1", features = ["std"] }
 rustls-platform-verifier = "0.5.0"

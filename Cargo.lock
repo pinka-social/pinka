@@ -1272,7 +1272,9 @@ dependencies = [
 
 [[package]]
 name = "ractor"
-version = "0.14.5"
+version = "0.14.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3dac85875229e230f661ef8b435643b2befbc5d422eaf732ee308eb8ecae829c"
 dependencies = [
  "bon",
  "dashmap",
@@ -1285,7 +1287,9 @@ dependencies = [
 
 [[package]]
 name = "ractor_cluster"
-version = "0.14.5"
+version = "0.14.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9900921bbfd398d157ed57a3f167cb1c23e0063e9be0acec14724fcba40312e7"
 dependencies = [
  "bytes",
  "prost",
@@ -1303,7 +1307,9 @@ dependencies = [
 
 [[package]]
 name = "ractor_cluster_derive"
-version = "0.14.5"
+version = "0.14.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a372ce9e882366606ee2e140247a9276948d95a355962e2fb5e84dbd86570d7"
 dependencies = [
  "quote",
  "syn",
