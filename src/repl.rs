@@ -49,7 +49,10 @@ pub(super) async fn run(repl_config: ReplConfig) -> Result<()> {
             info!("Dump raft log entries");
             info!("=====================");
             for entry in list.items {
-                info!("index = {}, value = {:?}", entry.index, entry.value);
+                info!(
+                    "term = {}, index = {}, value = {:?}",
+                    entry.term, entry.index, entry.value
+                );
             }
         }
         if line.starts_with("log") {

@@ -69,13 +69,44 @@ async fn main() -> Result<()> {
                     client_key: Some("s3.key".into()),
                     ..Default::default()
                 },
+                ServerConfig {
+                    name: "s4".into(),
+                    hostname: "localhost".into(),
+                    port: 8004,
+                    observer: true,
+                    server_cert_chain: vec!["s4.pem".into()],
+                    server_key: Some("s4.key".into()),
+                    client_cert_chain: vec!["s4.pem".into()],
+                    client_key: Some("s4.key".into()),
+                    ..Default::default()
+                },
             ],
-            manholes: vec![ManholeConfig {
-                server_name: "s1".into(),
-                auth_cookie: "".into(),
-                port: 9001,
-                enable: true,
-            }],
+            manholes: vec![
+                ManholeConfig {
+                    server_name: "s1".into(),
+                    auth_cookie: "".into(),
+                    port: 9001,
+                    enable: true,
+                },
+                ManholeConfig {
+                    server_name: "s2".into(),
+                    auth_cookie: "".into(),
+                    port: 9002,
+                    enable: true,
+                },
+                ManholeConfig {
+                    server_name: "s3".into(),
+                    auth_cookie: "".into(),
+                    port: 9003,
+                    enable: true,
+                },
+                ManholeConfig {
+                    server_name: "s4".into(),
+                    auth_cookie: "".into(),
+                    port: 9004,
+                    enable: true,
+                },
+            ],
             reconnect_timeout_ms: 10_000,
         },
         database: DatabaseConfig {

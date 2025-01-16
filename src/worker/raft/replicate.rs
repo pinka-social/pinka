@@ -50,6 +50,9 @@ pub(super) struct ReplicateState {
     ///
     /// Initialized to 0, increases monotonically.
     match_index: usize,
+
+    /// Whether this peer is only an observer.
+    observer: bool,
 }
 
 pub(super) struct ReplicateArgs {
@@ -67,6 +70,8 @@ pub(super) struct ReplicateArgs {
     pub(super) log: PartitionHandle,
     /// Index of the last entry in the leader's log.
     pub(super) last_log_index: usize,
+    /// Whether this peer is only an observer.
+    pub(super) observer: bool,
 }
 
 impl Actor for ReplicateWorker {
@@ -89,6 +94,7 @@ impl Actor for ReplicateWorker {
             log: args.log,
             next_index: args.last_log_index + 1,
             match_index: 0,
+            observer: args.observer,
         })
     }
 
@@ -198,11 +204,13 @@ impl ReplicateState {
         if response.success {
             self.match_index = prev_log_index + num_entries;
 
-            let msg = AdvanceCommitIndexMsg {
-                peer_id: Some(self.peer.get_name().unwrap()),
-                match_index: self.match_index,
-            };
-            ractor::cast!(self.parent, RaftMsg::AdvanceCommitIndex(msg))?;
+            if !self.observer {
+                let msg = AdvanceCommitIndexMsg {
+                    peer_id: Some(self.peer.get_name().unwrap()),
+                    match_index: self.match_index,
+                };
+                ractor::cast!(self.parent, RaftMsg::AdvanceCommitIndex(msg))?;
+            }
 
             self.next_index = self.match_index + 1;
         } else {
