@@ -24,7 +24,7 @@ use tokio::task::block_in_place;
 use tokio::time::{Instant, sleep};
 use tracing::{debug, info, trace, warn};
 
-use crate::config::RuntimeConfig;
+use crate::config::{RuntimeConfig, ServerConfig};
 
 pub(super) struct RaftWorker;
 
@@ -219,18 +219,30 @@ impl Actor for RaftWorker {
 
         match message {
             RequestVote(request) => {
+                if state.config.server.observer {
+                    return Ok(());
+                }
                 state.handle_request_vote(request).await?;
             }
             RequestVoteResponse(reply) => {
+                if state.config.server.observer {
+                    return Ok(());
+                }
                 state.handle_request_vote_response(reply).await?;
             }
             AppendEntries(request, reply) => {
                 state.handle_append_entries(request, reply).await?;
             }
             ElectionTimeout => {
+                if state.config.server.observer {
+                    return Ok(());
+                }
                 state.start_new_election().await?;
             }
             AdvanceCommitIndex(peer_info) => {
+                if state.config.server.observer {
+                    return Ok(());
+                }
                 state.advance_commit_index(peer_info);
             }
             UpdateTerm(new_term, peer_id) => {
@@ -381,7 +393,12 @@ impl RaftState {
             if server.get_name() == self.get_name() {
                 continue;
             }
-            info!(target: "raft", peer = %server.get_id(), "spawn replicate worker");
+            let observer = self
+                .server_config_for(&server.get_name().unwrap())
+                .context("server is not defined in config")?
+                .observer;
+
+            info!(target: "raft", peer = server.get_name().unwrap(), observer, "spawn replicate worker");
             let args = ReplicateArgs {
                 config: self.config.clone(),
                 raft: RaftShared {
@@ -393,6 +410,7 @@ impl RaftState {
                 peer: server.into(),
                 log: self.log.clone(),
                 last_log_index: self.last_log_index,
+                observer,
             };
             let (peer, _) =
                 Actor::spawn_linked(None, ReplicateWorker, args, self.get_cell()).await?;
@@ -411,7 +429,14 @@ impl RaftState {
     }
 
     fn voted_has_quorum(&self) -> bool {
-        let cluster_size = self.config.init.cluster.servers.len();
+        let cluster_size = self
+            .config
+            .init
+            .cluster
+            .servers
+            .iter()
+            .filter(|s| !s.observer)
+            .count();
         if cluster_size == 1 {
             return true;
         }
@@ -485,6 +510,13 @@ impl RaftState {
         assert!(matches!(self.role, RaftRole::Candidate));
         for peer in pg::get_scoped_members(&"raft".into(), &RaftWorker::pg_name()) {
             let peer: ActorRef<RaftMsg> = peer.into();
+            if self
+                .server_config_for(&peer.get_name().unwrap())
+                .unwrap()
+                .observer
+            {
+                continue;
+            }
 
             let request = RequestVoteAsk {
                 term: self.current_term,
@@ -746,6 +778,7 @@ impl RaftState {
         self.stop_children(None);
         self.replicate_workers.clear();
         self.persist_state().await?;
+        self.set_election_timer();
 
         info!(
             target: "raft",
@@ -756,7 +789,6 @@ impl RaftState {
 
         if was_leader || self.election_timer.is_none() {
             info!(target: "raft", "stepping down");
-            self.set_election_timer();
         }
 
         Ok(())
@@ -779,6 +811,15 @@ impl RaftState {
         }
         reply.send(false)?;
         Ok(())
+    }
+
+    fn server_config_for<'a>(&'a self, name: &str) -> Option<&'a ServerConfig> {
+        self.config
+            .init
+            .cluster
+            .servers
+            .iter()
+            .find(|&s| s.name == name)
     }
 
     fn get_leader(&self) -> Option<ActorRef<RaftMsg>> {
@@ -861,8 +902,11 @@ impl RaftState {
     }
 
     fn reset_match_index(&mut self) {
-        for index in self.match_index.values_mut() {
-            *index = 0;
+        self.match_index.clear();
+        for server in &self.config.init.cluster.servers {
+            if !server.observer {
+                self.match_index.insert(server.name.clone(), 0);
+            }
         }
     }
 

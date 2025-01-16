@@ -38,6 +38,7 @@ pub(crate) struct ServerConfig {
     pub(crate) name: String,
     pub(crate) hostname: String,
     pub(crate) port: u16,
+    pub(crate) observer: bool,
     pub(crate) server_ca_certs: Vec<PathBuf>,
     pub(crate) server_cert_chain: Vec<PathBuf>,
     pub(crate) server_key: Option<PathBuf>,

@@ -8,6 +8,7 @@
     - [x] Remote servers
     - [x] Log replication
     - [x] Client request forwarding
+    - [x] Non-voting observers (read replicas)
     - [ ] Cluster changes
     - [ ] Graceful shutdown
 - [ ] Activity Streams data models
