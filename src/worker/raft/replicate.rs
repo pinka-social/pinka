@@ -193,10 +193,7 @@ impl ReplicateState {
                 response.term,
                 current_term,
             );
-            ractor::cast!(
-                self.parent,
-                RaftMsg::UpdateTerm(response.term, self.peer.get_name().unwrap())
-            )?;
+            ractor::cast!(self.parent, RaftMsg::UpdateTerm(response.term))?;
             return Ok(());
         }
 
