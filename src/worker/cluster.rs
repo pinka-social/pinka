@@ -162,10 +162,8 @@ impl ClusterState {
             if peer.name == self.server.name {
                 continue;
             }
-            if let Some(status) = self.server_status.get(&peer.name) {
-                if matches!(status, ServerStatus::Connected) {
-                    continue;
-                }
+            if let Some(ServerStatus::Connected) = self.server_status.get(&peer.name) {
+                continue;
             }
             let node_server = node_server.clone();
             let tls_connector = if self.config.init.cluster.use_mtls {
