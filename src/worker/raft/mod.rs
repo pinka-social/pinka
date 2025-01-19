@@ -1,20 +1,23 @@
 mod log_entry;
 mod replicate;
-
-pub(crate) use self::log_entry::{LogEntry, LogEntryList, LogEntryValue};
+mod rpc;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::ops::Deref;
 use std::time::Duration;
 
+pub(crate) use self::log_entry::{LogEntry, LogEntryList, LogEntryValue};
 use self::replicate::{ReplicateArgs, ReplicateMsg, ReplicateWorker};
+pub(crate) use self::rpc::PinkaSerDe;
+pub(super) use self::rpc::{
+    AdvanceCommitIndexMsg, AppendEntriesAsk, AppendEntriesReply, PeerId, RequestVoteAsk,
+    RequestVoteReply,
+};
 
 use anyhow::{Context, Result, anyhow};
 use fjall::{KvSeparationOptions, PartitionCreateOptions, PartitionHandle};
-use ractor::{
-    Actor, ActorProcessingErr, ActorRef, BytesConvertable, RpcReplyPort, SupervisionEvent, pg,
-};
+use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent, pg};
 use ractor_cluster::RactorClusterMessage;
 use rand::{Rng, thread_rng};
 use serde::{Deserialize, Serialize};
@@ -76,6 +79,8 @@ struct RaftSaved {
     /// Updated on stable storage before responding to RPCs.
     voted_for: Option<PeerId>,
 }
+
+impl<'de> PinkaSerDe<'de> for RaftSaved {}
 
 pub(super) struct RaftState {
     /// Actor reference
@@ -363,8 +368,8 @@ impl RaftState {
     }
 
     async fn restore_state(&mut self) -> Result<()> {
-        let saved: RaftSaved = block_in_place(|| match self.restore.get("raft_saved") {
-            Ok(Some(value)) => postcard::from_bytes(&value),
+        let saved = block_in_place(|| match self.restore.get("raft_saved") {
+            Ok(Some(value)) => RaftSaved::from_bytes(&value),
             _ => Ok(RaftSaved::default()),
         })?;
         info!(
@@ -396,7 +401,8 @@ impl RaftState {
             voted_for: self.voted_for.clone(),
         };
         block_in_place(|| {
-            postcard::to_stdvec(&saved)
+            saved
+                .to_bytes()
                 .context("Failed to serialize raft_saved state")
                 .and_then(|value| {
                     self.restore
@@ -878,8 +884,7 @@ impl RaftState {
                 .context("get log entry failed")?
                 .ok_or_else(|| anyhow!("index out of range"))
                 .and_then(|(_, slice)| {
-                    postcard::from_bytes::<LogEntry>(&slice)
-                        .context("failed to deserialize log entry")
+                    LogEntry::from_bytes(&slice).context("failed to deserialize log entry")
                 })
         })
     }
@@ -891,8 +896,7 @@ impl RaftState {
                 .context("get log entry failed")?
                 .ok_or_else(|| anyhow!("log entry index {index} does not exist"))
                 .and_then(|slice| {
-                    postcard::from_bytes::<LogEntry>(&slice)
-                        .context("failed to deserialize log entry")
+                    LogEntry::from_bytes(&slice).context("failed to deserialize log entry")
                 })
         })
     }
@@ -904,7 +908,7 @@ impl RaftState {
             term: self.current_term,
             value,
         };
-        let value_bytes = postcard::to_stdvec(&new_log_entry)?;
+        let value_bytes = new_log_entry.to_bytes()?;
         block_in_place(|| -> Result<()> {
             self.log.insert(&index.to_be_bytes(), value_bytes)?;
             self.config.keyspace.persist(fjall::PersistMode::SyncAll)?;
@@ -918,7 +922,7 @@ impl RaftState {
     fn replicate_log_entries(&mut self, entries: &[LogEntry]) -> Result<()> {
         block_in_place(|| -> Result<()> {
             for entry in entries {
-                let value_bytes = postcard::to_stdvec(entry)?;
+                let value_bytes = entry.to_bytes()?;
                 self.log.insert(&entry.index.to_be_bytes(), value_bytes)?;
                 self.last_log_index = entry.index;
                 self.last_log_term = entry.term;
@@ -961,82 +965,3 @@ impl RaftState {
         }
     }
 }
-
-pub(super) type PeerId = String;
-
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub(super) struct AdvanceCommitIndexMsg {
-    pub(super) peer_id: Option<PeerId>,
-    pub(super) match_index: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(super) struct AppendEntriesAsk {
-    /// Leader's term
-    pub(super) term: u32,
-    /// Leader's id, so followers can redirect clients
-    pub(super) leader_id: PeerId,
-    /// Index of log entry immediately preceding new ones
-    pub(super) prev_log_index: usize,
-    /// Term of prev_log_index entry
-    pub(super) prev_log_term: u32,
-    /// Log entries to store (empty for heartbeat; may send more than one for
-    /// efficiency)
-    pub(super) entries: Vec<LogEntry>,
-    /// Leader's commit index
-    pub(super) commit_index: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(super) struct AppendEntriesReply {
-    /// Current term, for leader to update itself
-    pub(super) term: u32,
-    /// True if follower contained entry matching prev_log_index and
-    /// prev_log_term
-    pub(super) success: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(super) struct RequestVoteAsk {
-    /// Candidate's term
-    pub(super) term: u32,
-    /// Candidate's unique name
-    pub(super) candidate_name: String,
-    /// Index of candidate's last log entry
-    pub(super) last_log_index: usize,
-    /// Term of candidate's last log entry
-    pub(super) last_log_term: u32,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(super) struct RequestVoteReply {
-    /// Current term, for the candidate to update itself
-    pub(super) term: u32,
-    /// True means candidate received and granted vote
-    pub(super) vote_granted: bool,
-    /// Follower's unique name
-    pub(super) vote_from: String,
-}
-
-macro_rules! impl_bytes_convertable_for_serde {
-        ($t:ty) => {
-            impl BytesConvertable for $t {
-                fn into_bytes(self) -> Vec<u8> {
-                    postcard::to_stdvec(&self).expect(stringify!(unable to serialize $t))
-                }
-
-                fn from_bytes(bytes: Vec<u8>) -> Self {
-                    postcard::from_bytes(&bytes).expect(stringify!(unable to deserialize $t))
-                }
-            }
-        };
-    }
-
-impl_bytes_convertable_for_serde!(AdvanceCommitIndexMsg);
-impl_bytes_convertable_for_serde!(AppendEntriesAsk);
-impl_bytes_convertable_for_serde!(AppendEntriesReply);
-impl_bytes_convertable_for_serde!(RequestVoteAsk);
-impl_bytes_convertable_for_serde!(RequestVoteReply);
-impl_bytes_convertable_for_serde!(LogEntry);
-impl_bytes_convertable_for_serde!(LogEntryValue);
-impl_bytes_convertable_for_serde!(LogEntryList);
