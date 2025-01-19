@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_bytes::ByteBuf;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct LogEntry {
@@ -14,7 +15,7 @@ pub(crate) enum LogEntryValue {
     /// Raft cluster wide message
     ClusterMessage(String),
     /// Raw bytes for application payload
-    Bytes(Vec<u8>),
+    Bytes(ByteBuf),
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -9,7 +9,9 @@ use tokio::task::block_in_place;
 use tracing::{info, trace, warn};
 
 use super::log_entry::LogEntry;
-use super::{AdvanceCommitIndexMsg, AppendEntriesAsk, RaftMsg, RaftShared, RuntimeConfig};
+use super::{
+    AdvanceCommitIndexMsg, AppendEntriesAsk, PinkaSerDe, RaftMsg, RaftShared, RuntimeConfig,
+};
 
 pub(super) struct ReplicateWorker;
 
@@ -225,8 +227,7 @@ impl ReplicateState {
                 .context("get log entry failed")?
                 .ok_or_else(|| anyhow!("log entry index {index} does not exist"))
                 .and_then(|slice| {
-                    postcard::from_bytes::<LogEntry>(&slice)
-                        .context("failed to deserialize log entry")
+                    LogEntry::from_bytes(&slice).context("failed to deserialize log entry")
                 })
         })
     }
@@ -238,7 +239,7 @@ impl ReplicateState {
             let to = (self.next_index + 1).to_be_bytes();
             for rkv in self.log.range(from..to) {
                 match rkv {
-                    Ok((_, v)) => entries.push(postcard::from_bytes(&v)?),
+                    Ok((_, v)) => entries.push(LogEntry::from_bytes(&v)?),
                     Err(_) => bail!("failed to read all entries"),
                 }
             }

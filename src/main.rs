@@ -19,7 +19,7 @@ use self::config::{
 };
 use self::flags::{Dump, Pinka, PinkaCmd, RaftCmd, Serve};
 use self::worker::Supervisor;
-use self::worker::raft::LogEntry;
+use self::worker::raft::{LogEntry, PinkaSerDe};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -212,7 +212,7 @@ fn raft_dump(config: RuntimeConfig, flags: Dump) -> Result<()> {
     info!("=====================");
     for entry in log.iter().skip(flags.from.unwrap_or_default()) {
         let (key, value) = entry.unwrap();
-        let value: LogEntry = postcard::from_bytes(&value).unwrap();
+        let value = LogEntry::from_bytes(&value)?;
         info!(
             "key = {}, value = {:?}",
             usize::from_be_bytes(key.as_ref().try_into().unwrap()),

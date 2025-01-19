@@ -5,9 +5,8 @@ use ractor_cluster::{NodeServer, RactorClusterMessage};
 use tracing::warn;
 
 use crate::config::{RuntimeConfig, ServerConfig};
-use crate::worker::raft::{LogEntry, LogEntryValue};
 
-use super::raft::{LogEntryList, RaftMsg};
+use super::raft::{LogEntry, LogEntryList, LogEntryValue, PinkaSerDe, RaftMsg};
 
 pub(super) struct Manhole;
 
@@ -123,7 +122,7 @@ impl ManholeState {
         let mut items = vec![];
         for entry in log.iter().skip(from) {
             let (_, value) = entry.unwrap();
-            let item: LogEntry = postcard::from_bytes(&value)?;
+            let item = LogEntry::from_bytes(&value)?;
             items.push(item);
         }
         reply.send(LogEntryList { items })?;
