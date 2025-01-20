@@ -1,6 +1,6 @@
 ## Rough Implementation Plan
 
-- [ ] Actor based Raft core
+- [x] Actor based Raft core
     - [x] Supervisor tree
     - [x] Leader election
         - [x] AppendEntries RPC
@@ -16,6 +16,7 @@
         - [ ] Context processing
         - [ ] Vocab store
         - [ ] Node store
+    - [x] AS Model
     - [ ] AS Actor
     - [ ] AS Objects
         - [ ] Article

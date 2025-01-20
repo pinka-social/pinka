@@ -1,9 +1,48 @@
 //! Storage friendly presentation of Activity Streams' core data model.
 
+use anyhow::{Context, Result};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::{Number, Value as JsonValue};
+use serde_json::{Number, Value};
 
 use super::symbols::activitystreams_symbol_table;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Deserialize, Serialize)]
+pub(super) struct Header {
+    version: u32,
+}
+
+impl Header {
+    const V_1: Header = Header { version: 1 };
+}
+
+pub(crate) trait ObjectSerDe {
+    fn into_bytes(self) -> Result<Vec<u8>>
+    where
+        Self: Serialize + Into<NodeValue>,
+    {
+        let header = vec![];
+        let payload =
+            postcard::to_extend(&Header::V_1, header).context("unable to serialize RPC header")?;
+        let result =
+            postcard::to_extend(&self.into(), payload).context("unable to serialize payload")?;
+        Ok(result)
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self>
+    where
+        Self: DeserializeOwned + From<NodeValue>,
+    {
+        let (header, payload): (Header, _) =
+            postcard::take_from_bytes(bytes).context("unable to deserialize RPC header")?;
+        if header != Header::V_1 {
+            tracing::error!(target: "rpc", ?header, "invalid RPC header version");
+        }
+        Ok(Self::from(
+            postcard::from_bytes(&payload).context("unable to deserialize payload")?,
+        ))
+    }
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) enum Symbol {
@@ -12,13 +51,13 @@ pub(crate) enum Symbol {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub(crate) enum Value {
+pub(crate) enum NodeValue {
     Null,
     Bool(bool),
     Number(f64),
     Symbol(Symbol),
-    Array(Vec<Value>),
-    Object(Vec<(Symbol, Value)>),
+    Array(Vec<NodeValue>),
+    Object(Vec<(Symbol, NodeValue)>),
 }
 
 fn lossy_number_to_f64(number: Number) -> f64 {
@@ -51,49 +90,54 @@ impl From<Symbol> for String {
     }
 }
 
-impl Value {
+impl NodeValue {
     /// Simple recursive conversion with depth limit
-    fn from_serde_json(value: JsonValue, stack_depth: u8, limit: u8) -> Self {
+    fn from_serde_json(value: Value, stack_depth: u8, limit: u8) -> Self {
         if stack_depth == limit {
-            return Value::Null;
+            return NodeValue::Null;
         }
         match value {
-            JsonValue::Null => Value::Null,
-            JsonValue::Bool(v) => Value::Bool(v),
-            JsonValue::Number(n) => Value::Number(lossy_number_to_f64(n)),
-            JsonValue::String(s) => Value::Symbol(s.into()),
-            JsonValue::Array(vec) => Value::Array(
+            Value::Null => NodeValue::Null,
+            Value::Bool(v) => NodeValue::Bool(v),
+            Value::Number(n) => NodeValue::Number(lossy_number_to_f64(n)),
+            Value::String(s) => NodeValue::Symbol(s.into()),
+            Value::Array(vec) => NodeValue::Array(
                 vec.into_iter()
-                    .map(|v| Value::from_serde_json(v, stack_depth + 1, limit))
+                    .map(|v| NodeValue::from_serde_json(v, stack_depth + 1, limit))
                     .collect(),
             ),
-            JsonValue::Object(map) => Value::Object(
+            Value::Object(map) => NodeValue::Object(
                 map.into_iter()
-                    .map(|(k, v)| (k.into(), Value::from_serde_json(v, stack_depth + 1, limit)))
+                    .map(|(k, v)| {
+                        (
+                            k.into(),
+                            NodeValue::from_serde_json(v, stack_depth + 1, limit),
+                        )
+                    })
                     .collect(),
             ),
         }
     }
 }
 
-impl From<JsonValue> for Value {
-    fn from(value: JsonValue) -> Self {
+impl From<Value> for NodeValue {
+    fn from(value: Value) -> Self {
         Self::from_serde_json(value, 0, 128)
     }
 }
 
-impl From<Value> for JsonValue {
-    fn from(value: Value) -> Self {
+impl From<NodeValue> for Value {
+    fn from(value: NodeValue) -> Self {
         match value {
-            Value::Null => JsonValue::Null,
-            Value::Bool(v) => JsonValue::Bool(v),
-            Value::Number(n) => {
-                JsonValue::Number(Number::from_f64(n).expect("number should be f64 compatible"))
+            NodeValue::Null => Value::Null,
+            NodeValue::Bool(v) => Value::Bool(v),
+            NodeValue::Number(n) => {
+                Value::Number(Number::from_f64(n).expect("number should be f64 compatible"))
             }
-            Value::Symbol(s) => JsonValue::String(s.into()),
-            Value::Array(vec) => JsonValue::Array(vec.into_iter().map(JsonValue::from).collect()),
-            Value::Object(map) => {
-                JsonValue::Object(map.into_iter().map(|(k, v)| (k.into(), v.into())).collect())
+            NodeValue::Symbol(s) => Value::String(s.into()),
+            NodeValue::Array(vec) => Value::Array(vec.into_iter().map(Value::from).collect()),
+            NodeValue::Object(map) => {
+                Value::Object(map.into_iter().map(|(k, v)| (k.into(), v.into())).collect())
             }
         }
     }
@@ -103,7 +147,7 @@ impl From<Value> for JsonValue {
 mod tests {
     use serde_json::json;
 
-    use super::{JsonValue, Symbol, Value};
+    use super::{NodeValue, Symbol, Value};
 
     #[test]
     fn convert_mastodon_note() {
@@ -194,8 +238,10 @@ mod tests {
                 }
               }
         );
-        let value = Value::from(note);
-        let Value::Object(map) = value else { panic!() };
+        let value = NodeValue::from(note);
+        let NodeValue::Object(map) = value else {
+            panic!()
+        };
         assert!(map.iter().all(|pair| matches!(pair.0, Symbol::SymbolId(_))));
     }
 
@@ -235,9 +281,11 @@ mod tests {
                 ]
               }
         );
-        let value = Value::from_serde_json(note, 0, 1);
-        let Value::Object(map) = value else { panic!() };
-        assert!(map.iter().all(|pair| matches!(pair.1, Value::Null)));
+        let value = NodeValue::from_serde_json(note, 0, 1);
+        let NodeValue::Object(map) = value else {
+            panic!()
+        };
+        assert!(map.iter().all(|pair| matches!(pair.1, NodeValue::Null)));
     }
 
     #[test]
@@ -263,7 +311,7 @@ mod tests {
                 ]
             }
         );
-        let node: Value = note.clone().into();
-        assert_eq!(note, JsonValue::from(node));
+        let node: NodeValue = note.clone().into();
+        assert_eq!(note, Value::from(node));
     }
 }

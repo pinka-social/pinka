@@ -1,4 +1,4 @@
-mod activity;
+mod activity_pub;
 mod config;
 mod flags;
 mod repl;
