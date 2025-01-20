@@ -1,19 +1,25 @@
 use anyhow::{Context, Result};
 use ractor::BytesConvertable;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use super::{LogEntry, LogEntryList, LogEntryValue};
 
-pub(crate) trait PinkaSerDe<'de>: Serialize + Deserialize<'de> {
-    fn to_bytes(&self) -> Result<Vec<u8>> {
+pub(crate) trait RaftSerDe {
+    fn to_bytes(&self) -> Result<Vec<u8>>
+    where
+        Self: Serialize,
+    {
         let header = vec![];
         let payload =
             postcard::to_extend(&Header::V_1, header).context("unable to serialize RPC header")?;
         let result = postcard::to_extend(&self, payload).context("unable to serialize payload")?;
         Ok(result)
     }
-
-    fn from_bytes(bytes: &'de [u8]) -> Result<Self> {
+    fn from_bytes(bytes: &[u8]) -> Result<Self>
+    where
+        Self: DeserializeOwned,
+    {
         let (header, payload): (Header, _) =
             postcard::take_from_bytes(bytes).context("unable to deserialize RPC header")?;
         if header != Header::V_1 {
@@ -90,14 +96,14 @@ pub(crate) struct RequestVoteReply {
 
 macro_rules! impl_bytes_convertable_for_serde {
     ($t:ty) => {
-        impl<'de> PinkaSerDe<'de> for $t {}
+        impl RaftSerDe for $t {}
         impl BytesConvertable for $t {
             fn into_bytes(self) -> Vec<u8> {
-                PinkaSerDe::to_bytes(&self).unwrap()
+                RaftSerDe::to_bytes(&self).unwrap()
             }
 
             fn from_bytes(bytes: Vec<u8>) -> Self {
-                PinkaSerDe::from_bytes(&bytes).unwrap()
+                RaftSerDe::from_bytes(&bytes).unwrap()
             }
         }
     };

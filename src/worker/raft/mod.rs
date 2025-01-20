@@ -9,7 +9,7 @@ use std::time::Duration;
 
 pub(crate) use self::log_entry::{LogEntry, LogEntryList, LogEntryValue};
 use self::replicate::{ReplicateArgs, ReplicateMsg, ReplicateWorker};
-pub(crate) use self::rpc::PinkaSerDe;
+pub(crate) use self::rpc::RaftSerDe;
 pub(super) use self::rpc::{
     AdvanceCommitIndexMsg, AppendEntriesAsk, AppendEntriesReply, PeerId, RequestVoteAsk,
     RequestVoteReply,
@@ -80,7 +80,7 @@ struct RaftSaved {
     voted_for: Option<PeerId>,
 }
 
-impl<'de> PinkaSerDe<'de> for RaftSaved {}
+impl RaftSerDe for RaftSaved {}
 
 pub(super) struct RaftState {
     /// Actor reference
