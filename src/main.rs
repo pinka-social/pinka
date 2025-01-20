@@ -19,7 +19,6 @@ use self::config::{
 };
 use self::flags::{Dump, Pinka, PinkaCmd, RaftCmd, Serve};
 use self::worker::Supervisor;
-use self::worker::raft::{LogEntry, RaftSerDe};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -201,23 +200,23 @@ async fn serve(config: RuntimeConfig, flags: Serve) -> Result<()> {
 }
 
 fn raft_dump(config: RuntimeConfig, flags: Dump) -> Result<()> {
-    let log = config.keyspace.open_partition(
-        "raft_log",
-        PartitionCreateOptions::default()
-            .compression(fjall::CompressionType::Lz4)
-            .manual_journal_persist(true)
-            .with_kv_separation(KvSeparationOptions::default()),
-    )?;
-    info!("Dump raft log entries");
-    info!("=====================");
-    for entry in log.iter().skip(flags.from.unwrap_or_default()) {
-        let (key, value) = entry.unwrap();
-        let value = LogEntry::from_bytes(&value)?;
-        info!(
-            "key = {}, value = {:?}",
-            usize::from_be_bytes(key.as_ref().try_into().unwrap()),
-            value
-        );
-    }
+    // let log = config.keyspace.open_partition(
+    //     "raft_log",
+    //     PartitionCreateOptions::default()
+    //         .compression(fjall::CompressionType::Lz4)
+    //         .manual_journal_persist(true)
+    //         .with_kv_separation(KvSeparationOptions::default()),
+    // )?;
+    // info!("Dump raft log entries");
+    // info!("=====================");
+    // for entry in log.iter().skip(flags.from.unwrap_or_default()) {
+    //     let (key, value) = entry.unwrap();
+    //     let value = LogEntry::from_bytes(&value)?;
+    //     info!(
+    //         "key = {}, value = {:?}",
+    //         usize::from_be_bytes(key.as_ref().try_into().unwrap()),
+    //         value
+    //     );
+    // }
     Ok(())
 }

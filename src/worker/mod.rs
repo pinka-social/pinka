@@ -1,7 +1,6 @@
-pub(crate) mod raft;
-
 mod cluster;
 mod manhole;
+mod raft;
 mod supervisor;
 
 pub(crate) use manhole::ManholeMsg;

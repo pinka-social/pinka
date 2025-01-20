@@ -1,3 +1,4 @@
+mod client;
 mod log_entry;
 mod replicate;
 mod rpc;
@@ -7,10 +8,11 @@ use std::error::Error;
 use std::ops::Deref;
 use std::time::Duration;
 
+pub(crate) use self::client::{RaftClientMsg, get_raft_client};
 pub(crate) use self::log_entry::{LogEntry, LogEntryList, LogEntryValue};
 use self::replicate::{ReplicateArgs, ReplicateMsg, ReplicateWorker};
 pub(crate) use self::rpc::RaftSerDe;
-pub(super) use self::rpc::{
+use self::rpc::{
     AdvanceCommitIndexMsg, AppendEntriesAsk, AppendEntriesReply, PeerId, RequestVoteAsk,
     RequestVoteReply,
 };
@@ -18,7 +20,7 @@ pub(super) use self::rpc::{
 use anyhow::{Context, Result, anyhow};
 use fjall::{KvSeparationOptions, PartitionCreateOptions, PartitionHandle};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent, pg};
-use ractor_cluster::RactorClusterMessage;
+use ractor_cluster::{RactorClusterMessage, RactorMessage};
 use rand::{Rng, thread_rng};
 use serde::{Deserialize, Serialize};
 use tokio::select;
@@ -29,10 +31,35 @@ use tracing::{debug, info, trace, warn};
 
 use crate::config::{RuntimeConfig, ServerConfig};
 
-pub(super) struct RaftWorker;
+pub(super) struct RaftServer;
+#[derive(RactorMessage)]
+pub(super) enum RaftServerMsg {}
+
+impl Actor for RaftServer {
+    type Msg = RaftServerMsg;
+    type State = ();
+    type Arguments = RuntimeConfig;
+
+    async fn pre_start(
+        &self,
+        myself: ActorRef<Self::Msg>,
+        args: Self::Arguments,
+    ) -> Result<Self::State, ActorProcessingErr> {
+        Actor::spawn_linked(
+            Some(args.server.name.clone()),
+            RaftWorker,
+            args.clone(),
+            myself.get_cell(),
+        )
+        .await?;
+        Ok(())
+    }
+}
+
+struct RaftWorker;
 
 #[derive(RactorClusterMessage)]
-pub(super) enum RaftMsg {
+enum RaftMsg {
     ElectionTimeout,
     UpdateTerm(u32),
     AdvanceCommitIndex(AdvanceCommitIndexMsg),
@@ -47,7 +74,7 @@ pub(super) enum RaftMsg {
 
 /// Role played by the worker.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum RaftRole {
+enum RaftRole {
     Follower,
     Candidate,
     Leader,
@@ -82,7 +109,7 @@ struct RaftSaved {
 
 impl RaftSerDe for RaftSaved {}
 
-pub(super) struct RaftState {
+struct RaftState {
     /// Actor reference
     myself: ActorRef<RaftMsg>,
 
