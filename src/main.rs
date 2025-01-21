@@ -15,8 +15,8 @@ use tokio::signal::unix::{SignalKind, signal};
 use tracing::info;
 
 use self::config::{
-    ClusterConfig, Config, DatabaseConfig, ManholeConfig, RaftConfig, ReplConfig, RuntimeConfig,
-    ServerConfig,
+    ActivityPubConfig, ClusterConfig, Config, DatabaseConfig, ManholeConfig, RaftConfig,
+    ReplConfig, RuntimeConfig, ServerConfig,
 };
 use self::flags::{Dump, Pinka, PinkaCmd, RaftCmd, Serve};
 use self::worker::Supervisor;
@@ -112,6 +112,9 @@ async fn main() -> Result<()> {
         },
         database: DatabaseConfig {
             path: "devdb".into(),
+        },
+        activity_pub: ActivityPubConfig {
+            base_url: "http://localhost".into(),
         },
     };
 

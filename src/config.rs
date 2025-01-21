@@ -10,6 +10,7 @@ pub(crate) struct Config {
     pub(crate) raft: RaftConfig,
     pub(crate) cluster: ClusterConfig,
     pub(crate) database: DatabaseConfig,
+    pub(crate) activity_pub: ActivityPubConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -51,6 +52,12 @@ pub(crate) struct ServerConfig {
 #[serde(default)]
 pub(crate) struct DatabaseConfig {
     pub(crate) path: PathBuf,
+}
+
+#[derive(Clone, Default, Debug, Deserialize)]
+#[serde(default)]
+pub(crate) struct ActivityPubConfig {
+    pub(crate) base_url: String,
 }
 
 #[derive(Clone, Default, Debug, Deserialize)]
