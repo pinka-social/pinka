@@ -10,7 +10,7 @@ use tracing::{info, trace, warn};
 
 use super::log_entry::LogEntry;
 use super::{
-    AdvanceCommitIndexMsg, AppendEntriesAsk, PinkaSerDe, RaftMsg, RaftShared, RuntimeConfig,
+    AdvanceCommitIndexMsg, AppendEntriesAsk, RaftMsg, RaftSerDe, RaftShared, RuntimeConfig,
 };
 
 pub(super) struct ReplicateWorker;

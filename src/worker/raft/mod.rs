@@ -1,3 +1,4 @@
+mod client;
 mod log_entry;
 mod replicate;
 mod rpc;
@@ -7,10 +8,11 @@ use std::error::Error;
 use std::ops::Deref;
 use std::time::Duration;
 
+pub(crate) use self::client::{RaftClientMsg, get_raft_client};
 pub(crate) use self::log_entry::{LogEntry, LogEntryList, LogEntryValue};
 use self::replicate::{ReplicateArgs, ReplicateMsg, ReplicateWorker};
-pub(crate) use self::rpc::PinkaSerDe;
-pub(super) use self::rpc::{
+pub(crate) use self::rpc::RaftSerDe;
+use self::rpc::{
     AdvanceCommitIndexMsg, AppendEntriesAsk, AppendEntriesReply, PeerId, RequestVoteAsk,
     RequestVoteReply,
 };
@@ -18,7 +20,7 @@ pub(super) use self::rpc::{
 use anyhow::{Context, Result, anyhow};
 use fjall::{KvSeparationOptions, PartitionCreateOptions, PartitionHandle};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent, pg};
-use ractor_cluster::RactorClusterMessage;
+use ractor_cluster::{RactorClusterMessage, RactorMessage};
 use rand::{Rng, thread_rng};
 use serde::{Deserialize, Serialize};
 use tokio::select;
@@ -29,10 +31,54 @@ use tracing::{debug, info, trace, warn};
 
 use crate::config::{RuntimeConfig, ServerConfig};
 
-pub(super) struct RaftWorker;
+pub(super) struct RaftServer;
+#[derive(RactorMessage)]
+pub(super) enum RaftServerMsg {}
+
+impl Actor for RaftServer {
+    type Msg = RaftServerMsg;
+    type State = RuntimeConfig;
+    type Arguments = RuntimeConfig;
+
+    async fn pre_start(
+        &self,
+        myself: ActorRef<Self::Msg>,
+        args: Self::Arguments,
+    ) -> Result<Self::State, ActorProcessingErr> {
+        Actor::spawn_linked(
+            Some(args.server.name.clone()),
+            RaftWorker,
+            args.clone(),
+            myself.get_cell(),
+        )
+        .await?;
+        Ok(args)
+    }
+
+    async fn handle_supervisor_evt(
+        &self,
+        myself: ActorRef<Self::Msg>,
+        message: SupervisionEvent,
+        state: &mut Self::State,
+    ) -> std::result::Result<(), ActorProcessingErr> {
+        if let SupervisionEvent::ActorFailed(_, error) = message {
+            info!(target: "supervision", error, "raft worker crashed, restarting...");
+            Actor::spawn_linked(
+                Some(state.server.name.clone()),
+                RaftWorker,
+                state.clone(),
+                myself.get_cell(),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+}
+
+struct RaftWorker;
 
 #[derive(RactorClusterMessage)]
-pub(super) enum RaftMsg {
+enum RaftMsg {
     ElectionTimeout,
     UpdateTerm(u32),
     AdvanceCommitIndex(AdvanceCommitIndexMsg),
@@ -47,7 +93,7 @@ pub(super) enum RaftMsg {
 
 /// Role played by the worker.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum RaftRole {
+enum RaftRole {
     Follower,
     Candidate,
     Leader,
@@ -80,9 +126,9 @@ struct RaftSaved {
     voted_for: Option<PeerId>,
 }
 
-impl<'de> PinkaSerDe<'de> for RaftSaved {}
+impl RaftSerDe for RaftSaved {}
 
-pub(super) struct RaftState {
+struct RaftState {
     /// Actor reference
     myself: ActorRef<RaftMsg>,
 
@@ -620,9 +666,10 @@ impl RaftState {
 
         let log_ok = request.last_log_term > self.last_log_term
             || (request.last_log_term == self.last_log_term
-                && request.last_log_index == self.last_log_index);
+                && request.last_log_index >= self.last_log_index);
+        let grant = request.term == self.current_term && log_ok && self.voted_for.is_none();
 
-        if request.term == self.current_term && log_ok && self.voted_for.is_none() {
+        if grant {
             info!(
                 target: "raft",
                 candidate = request.candidate_name,
@@ -630,13 +677,22 @@ impl RaftState {
             );
             self.voted_for = Some(request.candidate_name.clone());
             self.persist_state().await?;
+        } else {
+            info!(
+                target: "raft",
+                candidate = request.candidate_name,
+                term_ok = (request.term == self.current_term),
+                log_ok,
+                voted_for = self.voted_for,
+                "vote rejected"
+            );
         }
 
         for server in pg::get_scoped_members(&"raft".into(), &RaftWorker::pg_name()) {
             if server.get_name().as_ref() == Some(&request.candidate_name) {
                 let response = RequestVoteReply {
                     term: self.current_term,
-                    vote_granted: self.voted_for == Some(request.candidate_name.clone()),
+                    vote_granted: grant,
                     vote_from: self.peer_id(),
                 };
                 let server: ActorRef<RaftMsg> = server.into();

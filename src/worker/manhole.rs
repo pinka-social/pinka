@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use fjall::{KvSeparationOptions, PartitionCreateOptions};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent, pg};
 use ractor_cluster::{NodeServer, RactorClusterMessage};
@@ -6,7 +6,9 @@ use tracing::warn;
 
 use crate::config::{RuntimeConfig, ServerConfig};
 
-use super::raft::{LogEntry, LogEntryList, LogEntryValue, PinkaSerDe, RaftMsg};
+use self::raft::RaftClientMsg;
+
+use super::raft::{self, LogEntry, LogEntryList, LogEntryValue, RaftSerDe};
 
 pub(super) struct Manhole;
 
@@ -129,11 +131,10 @@ impl ManholeState {
         Ok(())
     }
     async fn handle_append_raft_cluster_message(&self, msg: String) -> Result<()> {
-        let raft: ActorRef<RaftMsg> =
-            ActorRef::where_is(self.server.name.clone()).context("unable to find raft_worker")?;
+        let raft_client = raft::get_raft_client(&self.server.name)?;
         if !ractor::call!(
-            raft,
-            RaftMsg::ClientRequest,
+            raft_client,
+            RaftClientMsg::ClientRequest,
             LogEntryValue::ClusterMessage(msg)
         )? {
             warn!(target: "manhole", "unable to append raft cluster message");

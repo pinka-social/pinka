@@ -1,19 +1,25 @@
 use anyhow::{Context, Result};
 use ractor::BytesConvertable;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use super::{LogEntry, LogEntryList, LogEntryValue};
 
-pub(crate) trait PinkaSerDe<'de>: Serialize + Deserialize<'de> {
-    fn to_bytes(&self) -> Result<Vec<u8>> {
+pub(crate) trait RaftSerDe {
+    fn to_bytes(&self) -> Result<Vec<u8>>
+    where
+        Self: Serialize,
+    {
         let header = vec![];
         let payload =
             postcard::to_extend(&Header::V_1, header).context("unable to serialize RPC header")?;
         let result = postcard::to_extend(&self, payload).context("unable to serialize payload")?;
         Ok(result)
     }
-
-    fn from_bytes(bytes: &'de [u8]) -> Result<Self> {
+    fn from_bytes(bytes: &[u8]) -> Result<Self>
+    where
+        Self: DeserializeOwned,
+    {
         let (header, payload): (Header, _) =
             postcard::take_from_bytes(bytes).context("unable to deserialize RPC header")?;
         if header != Header::V_1 {
@@ -32,16 +38,16 @@ impl Header {
     const V_1: Header = Header { version: 1 };
 }
 
-pub(crate) type PeerId = String;
+pub(super) type PeerId = String;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
-pub(crate) struct AdvanceCommitIndexMsg {
+pub(super) struct AdvanceCommitIndexMsg {
     pub(super) peer_id: Option<PeerId>,
     pub(super) match_index: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct AppendEntriesAsk {
+pub(super) struct AppendEntriesAsk {
     /// Leader's term
     pub(super) term: u32,
     /// Leader's id, so followers can redirect clients
@@ -58,7 +64,7 @@ pub(crate) struct AppendEntriesAsk {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct AppendEntriesReply {
+pub(super) struct AppendEntriesReply {
     /// Current term, for leader to update itself
     pub(super) term: u32,
     /// True if follower contained entry matching prev_log_index and
@@ -67,7 +73,7 @@ pub(crate) struct AppendEntriesReply {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct RequestVoteAsk {
+pub(super) struct RequestVoteAsk {
     /// Candidate's term
     pub(super) term: u32,
     /// Candidate's unique name
@@ -79,7 +85,7 @@ pub(crate) struct RequestVoteAsk {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct RequestVoteReply {
+pub(super) struct RequestVoteReply {
     /// Current term, for the candidate to update itself
     pub(super) term: u32,
     /// True means candidate received and granted vote
@@ -90,14 +96,14 @@ pub(crate) struct RequestVoteReply {
 
 macro_rules! impl_bytes_convertable_for_serde {
     ($t:ty) => {
-        impl<'de> PinkaSerDe<'de> for $t {}
+        impl RaftSerDe for $t {}
         impl BytesConvertable for $t {
             fn into_bytes(self) -> Vec<u8> {
-                PinkaSerDe::to_bytes(&self).unwrap()
+                RaftSerDe::to_bytes(&self).unwrap()
             }
 
             fn from_bytes(bytes: Vec<u8>) -> Self {
-                PinkaSerDe::from_bytes(&bytes).unwrap()
+                RaftSerDe::from_bytes(&bytes).unwrap()
             }
         }
     };

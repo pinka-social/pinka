@@ -19,7 +19,7 @@ use self::config::{
 };
 use self::flags::{Dump, Pinka, PinkaCmd, RaftCmd, Serve};
 use self::worker::Supervisor;
-use self::worker::raft::{LogEntry, PinkaSerDe};
+use self::worker::raft::{LogEntry, RaftSerDe};
 
 #[tokio::main]
 async fn main() -> Result<()> {
