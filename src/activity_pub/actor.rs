@@ -6,6 +6,10 @@ use crate::config::ActivityPubConfig;
 
 use super::{NodeValue, ObjectSerDe};
 
+pub(crate) fn get_iri(config: &ActivityPubConfig, local_id: &str) -> String {
+    format!("{}/users/{}", config.base_url, local_id)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct Actor(pub(crate) Value);
 
