@@ -23,6 +23,9 @@ The model is based on [Activity Streams (AS) 2.0][AS2] and [Activity Pub (AP)][A
 
 **Per AS Object**
 
+Indexed by object id
+Optionally index by actor id?
+
 * Likes
 * Shares
 

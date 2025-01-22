@@ -10,6 +10,7 @@ pub(crate) struct Config {
     pub(crate) raft: RaftConfig,
     pub(crate) cluster: ClusterConfig,
     pub(crate) database: DatabaseConfig,
+    pub(crate) activity_pub: ActivityPubConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -38,6 +39,7 @@ pub(crate) struct ServerConfig {
     pub(crate) name: String,
     pub(crate) hostname: String,
     pub(crate) port: u16,
+    pub(crate) http_port: u16,
     pub(crate) observer: bool,
     pub(crate) server_ca_certs: Vec<PathBuf>,
     pub(crate) server_cert_chain: Vec<PathBuf>,
@@ -51,6 +53,12 @@ pub(crate) struct ServerConfig {
 #[serde(default)]
 pub(crate) struct DatabaseConfig {
     pub(crate) path: PathBuf,
+}
+
+#[derive(Clone, Default, Debug, Deserialize)]
+#[serde(default)]
+pub(crate) struct ActivityPubConfig {
+    pub(crate) base_url: String,
 }
 
 #[derive(Clone, Default, Debug, Deserialize)]

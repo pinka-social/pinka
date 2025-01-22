@@ -1,5 +1,7 @@
+mod activity_pub;
 mod config;
 mod flags;
+mod http;
 mod repl;
 mod worker;
 
@@ -11,11 +13,11 @@ use fd_lock::RwLock;
 use fjall::{KvSeparationOptions, PartitionCreateOptions};
 use ractor::Actor;
 use tokio::signal::unix::{SignalKind, signal};
-use tracing::info;
+use tracing::{error, info};
 
 use self::config::{
-    ClusterConfig, Config, DatabaseConfig, ManholeConfig, RaftConfig, ReplConfig, RuntimeConfig,
-    ServerConfig,
+    ActivityPubConfig, ClusterConfig, Config, DatabaseConfig, ManholeConfig, RaftConfig,
+    ReplConfig, RuntimeConfig, ServerConfig,
 };
 use self::flags::{Dump, Pinka, PinkaCmd, RaftCmd, Serve};
 use self::worker::Supervisor;
@@ -35,7 +37,7 @@ async fn main() -> Result<()> {
         },
         cluster: ClusterConfig {
             auth_cookie: "foobar".to_string(),
-            use_mtls: true,
+            use_mtls: false,
             pem_dir: Some("devcerts".into()),
             ca_certs: vec!["ca_cert.pem".into()],
             servers: vec![
@@ -43,6 +45,7 @@ async fn main() -> Result<()> {
                     name: "s1".into(),
                     hostname: "localhost".into(),
                     port: 8001,
+                    http_port: 7001,
                     server_cert_chain: vec!["s1.pem".into()],
                     server_key: Some("s1.key".into()),
                     client_cert_chain: vec!["s1.pem".into()],
@@ -112,6 +115,9 @@ async fn main() -> Result<()> {
         database: DatabaseConfig {
             path: "devdb".into(),
         },
+        activity_pub: ActivityPubConfig {
+            base_url: "http://localhost".into(),
+        },
     };
 
     if config.cluster.servers.len() < flags.server.unwrap_or_default() {
@@ -175,14 +181,23 @@ async fn main() -> Result<()> {
 }
 
 async fn serve(config: RuntimeConfig, flags: Serve) -> Result<()> {
-    let (supervisor, actor_handle) =
-        Actor::spawn(Some("supervisor".into()), Supervisor, (flags, config)).await?;
+    let (supervisor, actor_handle) = Actor::spawn(
+        Some("supervisor".into()),
+        Supervisor,
+        (flags, config.clone()),
+    )
+    .await?;
 
+    let http = http::serve(&config);
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
 
     loop {
         tokio::select! {
+            _ = http => {
+                error!("HTTP server crashed");
+                break;
+            }
             _ = sigterm.recv() => {
                 info!("Received the terminate signal; stopping");
                 break;

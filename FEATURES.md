@@ -1,6 +1,6 @@
 ## Rough Implementation Plan
 
-- [ ] Actor based Raft core
+- [x] Actor based Raft core
     - [x] Supervisor tree
     - [x] Leader election
         - [x] AppendEntries RPC
@@ -12,6 +12,11 @@
     - [ ] Cluster changes
     - [ ] Graceful shutdown
 - [ ] Activity Streams data models
+    - [ ] JSON-LD lite
+        - [ ] Context processing
+        - [ ] Vocab store
+        - [ ] Node store
+    - [x] AS Model
     - [ ] AS Actor
     - [ ] AS Objects
         - [ ] Article
