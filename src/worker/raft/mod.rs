@@ -2,6 +2,7 @@ mod client;
 mod log_entry;
 mod replicate;
 mod rpc;
+mod state_machine;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -16,6 +17,7 @@ use self::rpc::{
     AdvanceCommitIndexMsg, AppendEntriesAsk, AppendEntriesReply, PeerId, RequestVoteAsk,
     RequestVoteReply,
 };
+use self::state_machine::StateDriver;
 
 use anyhow::{Context, Result, anyhow};
 use fjall::{KvSeparationOptions, PartitionCreateOptions, PartitionHandle};
@@ -89,6 +91,7 @@ enum RaftMsg {
     // TODO: add status code
     #[rpc]
     ClientRequest(LogEntryValue, RpcReplyPort<bool>),
+    Applied(u64),
 }
 
 /// Role played by the worker.
@@ -124,6 +127,9 @@ struct RaftSaved {
     ///
     /// Updated on stable storage before responding to RPCs.
     voted_for: Option<PeerId>,
+
+    /// Last applied log entry index
+    last_applied: usize,
 }
 
 impl RaftSerDe for RaftSaved {}
@@ -180,7 +186,7 @@ struct RaftState {
 
     /// Volatile state. Index of highest log entry applied to the state machine
     /// (initialized to 0, increases monotonically).
-    _last_applied: usize,
+    last_applied: usize,
 
     /// Keeps track of outstanding start election timer.
     election_timer: Option<Sender<Duration>>,
@@ -236,6 +242,8 @@ impl Actor for RaftWorker {
 
         let mut state = RaftState::new(myself, config, log, restore);
         state.restore_state().await?;
+
+        Actor::spawn_linked(None, StateDriver, todo!(), myself.get_cell()).await?;
 
         Ok(state)
     }
@@ -301,6 +309,10 @@ impl Actor for RaftWorker {
             }
             ClientRequest(request, reply) => {
                 state.handle_client_request(request, reply).await?;
+            }
+            Applied(last_applied) => {
+                state.last_applied = last_applied as usize;
+                state.persist_state().await?;
             }
         }
 
@@ -402,7 +414,7 @@ impl RaftState {
             leader_id: None,
             last_log_term: 0,
             last_log_index: 0,
-            _last_applied: 0,
+            last_applied: 0,
             election_timer: None,
             replicate_workers: BTreeMap::new(),
         }
@@ -426,6 +438,7 @@ impl RaftState {
         );
         self.current_term = saved.current_term;
         self.voted_for = saved.voted_for;
+        self.last_applied = saved.last_applied;
 
         if let Ok(last_log) = self.get_last_log_entry() {
             info!(
@@ -445,6 +458,7 @@ impl RaftState {
         let saved = RaftSaved {
             current_term: self.current_term,
             voted_for: self.voted_for.clone(),
+            last_applied: self.last_applied,
         };
         block_in_place(|| {
             saved
