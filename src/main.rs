@@ -225,12 +225,12 @@ fn raft_dump(config: RuntimeConfig, flags: Dump) -> Result<()> {
     )?;
     info!("Dump raft log entries");
     info!("=====================");
-    for entry in log.iter().skip(flags.from.unwrap_or_default()) {
+    for entry in log.range(flags.from.unwrap_or_default().to_be_bytes()..) {
         let (key, value) = entry.unwrap();
         let value = LogEntry::from_bytes(&value)?;
         info!(
             "key = {}, value = {:?}",
-            usize::from_be_bytes(key.as_ref().try_into().unwrap()),
+            u64::from_be_bytes(key.as_ref().try_into().unwrap()),
             value
         );
     }

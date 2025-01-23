@@ -8,9 +8,11 @@
     - [x] Remote servers
     - [x] Log replication
     - [x] Client request forwarding
+    - [x] State machine application
     - [x] Non-voting observers (read replicas)
     - [ ] Cluster changes
     - [ ] Graceful shutdown
+    - [ ] Log compaction
 - [ ] Activity Streams data models
     - [ ] JSON-LD lite
         - [ ] Context processing

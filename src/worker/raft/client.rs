@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use ractor::{ActorRef, DerivedActorRef, RpcReplyPort};
 use ractor_cluster::RactorClusterMessage;
+use serde::{Deserialize, Serialize};
+use serde_bytes::ByteBuf;
 
 use super::{LogEntryValue, RaftMsg};
 
@@ -8,7 +10,7 @@ use super::{LogEntryValue, RaftMsg};
 pub(crate) enum RaftClientMsg {
     // TODO: add status code
     #[rpc]
-    ClientRequest(LogEntryValue, RpcReplyPort<bool>),
+    ClientRequest(LogEntryValue, RpcReplyPort<ClientResult>),
 }
 
 impl From<RaftClientMsg> for RaftMsg {
@@ -25,6 +27,21 @@ impl From<RaftMsg> for RaftClientMsg {
             RaftMsg::ClientRequest(value, reply) => RaftClientMsg::ClientRequest(value, reply),
             _ => panic!("unsupported RaftClientMsg conversion"),
         }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) enum ClientResult {
+    Ok(ByteBuf),
+    Err(ByteBuf),
+}
+
+impl ClientResult {
+    pub(crate) fn ok() -> ClientResult {
+        ClientResult::Ok(ByteBuf::new())
+    }
+    pub(crate) fn is_ok(&self) -> bool {
+        matches!(self, ClientResult::Ok(_))
     }
 }
 
