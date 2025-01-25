@@ -1,8 +1,8 @@
-mod symbols;
+#[macro_use]
+mod object_serde;
+mod repo;
 
-pub(crate) mod actor;
-pub(crate) mod actor_store;
 pub(crate) mod machine;
-pub(crate) mod object;
+pub(crate) mod model;
 
-use object::{NodeValue, ObjectSerDe};
+pub(crate) use repo::ActorRepo;

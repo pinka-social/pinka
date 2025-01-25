@@ -1,18 +1,18 @@
 use anyhow::Result;
 use fjall::{Keyspace, PartitionCreateOptions, PartitionHandle};
 
-use super::ObjectSerDe;
-use super::actor::Actor;
+use crate::activity_pub::model::Actor;
+use crate::activity_pub::object_serde::ObjectSerDe;
 
 #[derive(Clone)]
-pub(crate) struct ActorStore {
+pub(crate) struct ActorRepo {
     actors: PartitionHandle,
 }
 
-impl ActorStore {
-    pub(crate) fn new(keyspace: Keyspace) -> Result<ActorStore> {
+impl ActorRepo {
+    pub(crate) fn new(keyspace: Keyspace) -> Result<ActorRepo> {
         let actors = keyspace.open_partition("actors", PartitionCreateOptions::default())?;
-        Ok(ActorStore { actors })
+        Ok(ActorRepo { actors })
     }
     pub(crate) fn insert(&self, iri: &str, actor: Actor) -> Result<()> {
         let bytes = actor.into_bytes()?;
@@ -35,13 +35,13 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    use super::{Actor, ActorStore};
+    use super::{Actor, ActorRepo};
 
     #[test]
     fn insert_then_find() -> Result<()> {
         let tmp_dir = tempdir()?;
         let keyspace = Keyspace::open(Config::new(tmp_dir.path()).temporary(true))?;
-        let store = ActorStore::new(keyspace)?;
+        let store = ActorRepo::new(keyspace)?;
         let actor = Actor::try_from(json!(
             {
                 "@context": ["https://www.w3.org/ns/activitystreams",

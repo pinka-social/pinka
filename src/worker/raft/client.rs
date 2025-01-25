@@ -1,8 +1,10 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use ractor::{ActorRef, DerivedActorRef, RpcReplyPort};
 use ractor_cluster::RactorClusterMessage;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
+
+use crate::worker::raft::RaftWorker;
 
 use super::{LogEntryValue, RaftMsg};
 
@@ -45,8 +47,22 @@ impl ClientResult {
     }
 }
 
+impl From<ByteBuf> for ClientResult {
+    fn from(value: ByteBuf) -> Self {
+        ClientResult::Ok(value)
+    }
+}
+
 pub(crate) fn get_raft_client(name: &str) -> Result<DerivedActorRef<RaftClientMsg>> {
     let raft_worker: ActorRef<RaftMsg> =
         ActorRef::where_is(name.into()).context("raft_worker is not running")?;
     Ok(raft_worker.get_derived())
+}
+
+pub(crate) fn get_raft_local_client() -> Result<DerivedActorRef<RaftClientMsg>> {
+    for cell in ractor::pg::get_scoped_local_members(&"raft".into(), &RaftWorker::pg_name()) {
+        let worker: ActorRef<RaftMsg> = cell.into();
+        return Ok(worker.get_derived());
+    }
+    bail!("no local raft_worker")
 }

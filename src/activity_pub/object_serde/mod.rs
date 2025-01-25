@@ -1,25 +1,24 @@
-//! Storage friendly presentation of Activity Streams' core data model.
+mod symbols;
 
 use anyhow::{Context, Result};
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value};
 
-use super::symbols::activitystreams_symbol_table;
+use self::symbols::activitystreams_symbol_table;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Deserialize, Serialize)]
-pub(super) struct Header {
+pub(crate) struct Header {
     version: u32,
 }
 
 impl Header {
-    const V_1: Header = Header { version: 1 };
+    pub(crate) const V_1: Header = Header { version: 1 };
 }
 
 pub(crate) trait ObjectSerDe {
     fn into_bytes(self) -> Result<Vec<u8>>
     where
-        Self: Serialize + Into<NodeValue>,
+        Self: Into<NodeValue>,
     {
         let header = vec![];
         let payload =
@@ -31,7 +30,7 @@ pub(crate) trait ObjectSerDe {
 
     fn from_bytes(bytes: &[u8]) -> Result<Self>
     where
-        Self: DeserializeOwned + From<NodeValue>,
+        Self: From<NodeValue>,
     {
         let (header, payload): (Header, _) =
             postcard::take_from_bytes(bytes).context("unable to deserialize RPC header")?;
@@ -42,6 +41,71 @@ pub(crate) trait ObjectSerDe {
             postcard::from_bytes(&payload).context("unable to deserialize payload")?,
         ))
     }
+}
+
+macro_rules! impl_object_serde_new_type {
+    ($typ:ident) => {
+        impl crate::activity_pub::object_serde::ObjectSerDe for $typ {}
+        impl serde::Serialize for $typ {
+            fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                use crate::activity_pub::object_serde::ObjectSerDe;
+                serializer.serialize_bytes(&self.clone().into_bytes().unwrap())
+            }
+        }
+        impl<'de> serde::Deserialize<'de> for $typ {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct ObjectVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for ObjectVisitor {
+                    type Value = $typ;
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                        formatter.write_str(stringify!($typ))
+                    }
+                    fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        use crate::activity_pub::object_serde::ObjectSerDe;
+                        Ok($typ::from_bytes(v).map_err(|e| E::custom(e))?)
+                    }
+                }
+
+                deserializer.deserialize_bytes(ObjectVisitor)
+            }
+        }
+        impl From<$typ> for crate::activity_pub::object_serde::NodeValue {
+            fn from(value: $typ) -> Self {
+                value.0.into()
+            }
+        }
+        impl From<crate::activity_pub::object_serde::NodeValue> for $typ {
+            fn from(value: crate::activity_pub::object_serde::NodeValue) -> Self {
+                $typ(value.into())
+            }
+        }
+        impl From<$typ> for serde_json::Value {
+            fn from(value: $typ) -> Self {
+                value.0
+            }
+        }
+        impl std::ops::Deref for $typ {
+            type Target = serde_json::Value;
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
+        }
+        impl std::ops::DerefMut for $typ {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                &mut self.0
+            }
+        }
+    };
 }
 
 #[derive(Debug, Deserialize, Serialize)]

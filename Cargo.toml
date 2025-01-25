@@ -9,10 +9,12 @@ default-run = "pinka"
 [dependencies]
 anyhow = "1.0"
 axum = "0.8.1"
+base62 = "2.2.1"
 bimap = "0.6.3"
 fd-lock = "4.0.2"
 fjall = "2.4"
 futures = "0.3.31"
+jiff = "0.1.26"
 postcard = { version = "1.1.1", default-features = false, features = [
     "use-std",
 ] }
@@ -35,6 +37,7 @@ tokio-rustls = "0.26.1"
 toml = "0.8.19"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
+uuid = { version = "1.12.1", features = ["v7"] }
 xflags = "0.3.2"
 
 [dev-dependencies]

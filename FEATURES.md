@@ -35,4 +35,6 @@
     - [ ] Moderation
     - [ ] Spam detection
 - [ ] ActivityPub endpoints
+    - [ ] Client to Server Interactions
+        - [ ] Create Activity
 - [ ] RESTful endpoints for webui
