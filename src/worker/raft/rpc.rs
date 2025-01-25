@@ -3,6 +3,7 @@ use ractor::BytesConvertable;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use super::client::ClientResult;
 use super::{LogEntry, LogEntryList, LogEntryValue};
 
 pub(crate) trait RaftSerDe {
@@ -43,7 +44,7 @@ pub(super) type PeerId = String;
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub(super) struct AdvanceCommitIndexMsg {
     pub(super) peer_id: Option<PeerId>,
-    pub(super) match_index: usize,
+    pub(super) match_index: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -53,14 +54,14 @@ pub(super) struct AppendEntriesAsk {
     /// Leader's id, so followers can redirect clients
     pub(super) leader_id: PeerId,
     /// Index of log entry immediately preceding new ones
-    pub(super) prev_log_index: usize,
+    pub(super) prev_log_index: u64,
     /// Term of prev_log_index entry
     pub(super) prev_log_term: u32,
     /// Log entries to store (empty for heartbeat; may send more than one for
     /// efficiency)
     pub(super) entries: Vec<LogEntry>,
     /// Leader's commit index
-    pub(super) commit_index: usize,
+    pub(super) commit_index: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -79,7 +80,7 @@ pub(super) struct RequestVoteAsk {
     /// Candidate's unique name
     pub(super) candidate_name: String,
     /// Index of candidate's last log entry
-    pub(super) last_log_index: usize,
+    pub(super) last_log_index: u64,
     /// Term of candidate's last log entry
     pub(super) last_log_term: u32,
 }
@@ -117,3 +118,4 @@ impl_bytes_convertable_for_serde!(RequestVoteReply);
 impl_bytes_convertable_for_serde!(LogEntry);
 impl_bytes_convertable_for_serde!(LogEntryValue);
 impl_bytes_convertable_for_serde!(LogEntryList);
+impl_bytes_convertable_for_serde!(ClientResult);

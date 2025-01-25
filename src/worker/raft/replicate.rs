@@ -46,12 +46,12 @@ pub(super) struct ReplicateState {
     /// Index of the next log entry to send to that peer.
     ///
     /// Initialized to leader last log index + 1.
-    next_index: usize,
+    next_index: u64,
 
     /// Index of the highest log entry known to be replicated on the peer.
     ///
     /// Initialized to 0, increases monotonically.
-    match_index: usize,
+    match_index: u64,
 
     /// Whether this peer is only an observer.
     observer: bool,
@@ -71,7 +71,7 @@ pub(super) struct ReplicateArgs {
     /// Raft log
     pub(super) log: PartitionHandle,
     /// Index of the last entry in the leader's log.
-    pub(super) last_log_index: usize,
+    pub(super) last_log_index: u64,
     /// Whether this peer is only an observer.
     pub(super) observer: bool,
 }
@@ -154,7 +154,7 @@ impl ReplicateState {
             0
         };
         let entries = self.get_log_entries()?;
-        let num_entries = entries.len();
+        let num_entries = entries.len() as u64;
         let commit_index = self.raft.commit_index.min(prev_log_index + num_entries);
         let current_term = self.raft.current_term;
 
@@ -220,7 +220,7 @@ impl ReplicateState {
         Ok(())
     }
 
-    fn get_log_entry(&self, index: usize) -> anyhow::Result<LogEntry> {
+    fn get_log_entry(&self, index: u64) -> anyhow::Result<LogEntry> {
         block_in_place(|| {
             self.log
                 .get(&index.to_be_bytes())

@@ -2,13 +2,13 @@ mod client;
 mod log_entry;
 mod replicate;
 mod rpc;
+mod state_machine;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::error::Error;
-use std::ops::Deref;
+use std::ops::{Deref, RangeBounds};
 use std::time::Duration;
 
-pub(crate) use self::client::{RaftClientMsg, get_raft_client};
+pub(crate) use self::client::{ClientResult, RaftClientMsg, get_raft_client};
 pub(crate) use self::log_entry::{LogEntry, LogEntryList, LogEntryValue};
 use self::replicate::{ReplicateArgs, ReplicateMsg, ReplicateWorker};
 pub(crate) use self::rpc::RaftSerDe;
@@ -16,6 +16,7 @@ use self::rpc::{
     AdvanceCommitIndexMsg, AppendEntriesAsk, AppendEntriesReply, PeerId, RequestVoteAsk,
     RequestVoteReply,
 };
+pub(crate) use self::state_machine::{RaftAppliedMsg, StateMachineMsg, get_raft_applied};
 
 use anyhow::{Context, Result, anyhow};
 use fjall::{KvSeparationOptions, PartitionCreateOptions, PartitionHandle};
@@ -88,7 +89,8 @@ enum RaftMsg {
     RequestVoteResponse(RequestVoteReply),
     // TODO: add status code
     #[rpc]
-    ClientRequest(LogEntryValue, RpcReplyPort<bool>),
+    ClientRequest(LogEntryValue, RpcReplyPort<ClientResult>),
+    Applied(u64, ClientResult),
 }
 
 /// Role played by the worker.
@@ -109,7 +111,7 @@ struct RaftShared {
 
     /// Volatile state. Index of highest log entry known to be committed
     /// (initialized to 0, increases monotonically).
-    commit_index: usize,
+    commit_index: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -124,6 +126,9 @@ struct RaftSaved {
     ///
     /// Updated on stable storage before responding to RPCs.
     voted_for: Option<PeerId>,
+
+    /// Last applied log entry index
+    last_applied: u64,
 }
 
 impl RaftSerDe for RaftSaved {}
@@ -158,14 +163,14 @@ struct RaftState {
     /// Volatile state on leaders. For each peer, index of the highest log
     /// entry known to be replicated on server (initialized to 0, increases
     /// monotonically).
-    match_index: BTreeMap<PeerId, usize>,
+    match_index: BTreeMap<PeerId, u64>,
 
     /// Raft log partition
     log: PartitionHandle,
 
     /// Volatile state. Index of highest log entry known to be committed
     /// (initialized to 0, increases monotonically).
-    commit_index: usize,
+    commit_index: u64,
 
     /// Last known remote leader
     leader_id: Option<PeerId>,
@@ -176,17 +181,31 @@ struct RaftState {
 
     /// Volatile state. Index of the last log entry appended. Initialized from
     /// log and updated after each append.
-    last_log_index: usize,
+    last_log_index: u64,
 
-    /// Volatile state. Index of highest log entry applied to the state machine
-    /// (initialized to 0, increases monotonically).
-    _last_applied: usize,
+    /// Volatile state. Index of the last log entry enqueued for the state
+    /// machine to avoid sending duplicated log entries to the state machine.
+    /// However the state machine might still receive repeated logs after a
+    /// crash restore.
+    ///
+    /// Restored from last_applied.
+    last_queued: u64,
+
+    /// Index of highest log entry applied to the state machine (initialized to
+    /// 0, increases monotonically).
+    ///
+    /// Updated on stable storage after state machine has applied an entry.
+    last_applied: u64,
 
     /// Keeps track of outstanding start election timer.
     election_timer: Option<Sender<Duration>>,
 
     /// Peers, workaround bug in ractor
     replicate_workers: BTreeMap<PeerId, ActorRef<ReplicateMsg>>,
+
+    /// Volatile state on leaders. Outstanding client requests mapped by log index.
+    /// TODO: add Effect
+    pending_responses: BTreeMap<u64, RpcReplyPort<ClientResult>>,
 }
 
 impl Deref for RaftState {
@@ -294,13 +313,16 @@ impl Actor for RaftWorker {
                 if state.config.server.observer {
                     return Ok(());
                 }
-                state.advance_commit_index(peer_info);
+                state.advance_commit_index(peer_info)?;
             }
             UpdateTerm(new_term) => {
                 state.update_term(new_term).await?;
             }
             ClientRequest(request, reply) => {
                 state.handle_client_request(request, reply).await?;
+            }
+            Applied(last_applied, result) => {
+                state.handle_applied(last_applied, result).await?;
             }
         }
 
@@ -402,9 +424,11 @@ impl RaftState {
             leader_id: None,
             last_log_term: 0,
             last_log_index: 0,
-            _last_applied: 0,
+            last_queued: 0,
+            last_applied: 0,
             election_timer: None,
             replicate_workers: BTreeMap::new(),
+            pending_responses: BTreeMap::new(),
         }
     }
 
@@ -426,6 +450,8 @@ impl RaftState {
         );
         self.current_term = saved.current_term;
         self.voted_for = saved.voted_for;
+        self.last_queued = saved.last_applied;
+        self.last_applied = saved.last_applied;
 
         if let Ok(last_log) = self.get_last_log_entry() {
             info!(
@@ -445,6 +471,7 @@ impl RaftState {
         let saved = RaftSaved {
             current_term: self.current_term,
             voted_for: self.voted_for.clone(),
+            last_applied: self.last_applied,
         };
         block_in_place(|| {
             saved
@@ -506,7 +533,7 @@ impl RaftState {
         Ok(())
     }
 
-    fn min_quorum_match_index(&self) -> usize {
+    fn min_quorum_match_index(&self) -> u64 {
         if self.match_index.is_empty() {
             return 0;
         }
@@ -626,20 +653,20 @@ impl RaftState {
         }
     }
 
-    fn advance_commit_index(&mut self, peer_info: AdvanceCommitIndexMsg) {
+    fn advance_commit_index(&mut self, peer_info: AdvanceCommitIndexMsg) -> Result<()> {
         if thread_rng().gen_bool(1.0 / 10000.0) {
             panic!("simulated crash");
         }
         if !matches!(self.role, RaftRole::Leader) {
             warn!(target: "raft", "advance_commit_index called as {:?}", self.role);
-            return;
+            return Ok(());
         }
         if let Some(peer_id) = peer_info.peer_id {
             self.match_index.insert(peer_id, peer_info.match_index);
         }
         let new_commit_index = self.min_quorum_match_index();
         if self.commit_index >= new_commit_index {
-            return;
+            return Ok(());
         }
         // At least one log entry must be from the current term to guarantee
         // that no server without them can be elected.
@@ -651,6 +678,21 @@ impl RaftState {
                 self.notify_state_change();
             }
         }
+
+        debug_assert!(self.last_queued >= self.last_applied);
+        debug_assert!(self.commit_index >= self.last_queued);
+
+        // TODO configurable machine name
+        if let Some(cell) = ActorRef::where_is("state_machine".into()) {
+            let machine: ActorRef<StateMachineMsg> = cell.into();
+            // TODO avoid message pile up
+            for log_entry in self.log_entry_range(self.last_queued..=self.commit_index) {
+                ractor::cast!(machine, StateMachineMsg::Apply(log_entry?))?;
+            }
+            self.last_queued = self.commit_index;
+        }
+
+        Ok(())
     }
 
     async fn handle_request_vote(&mut self, request: RequestVoteAsk) -> Result<()> {
@@ -881,6 +923,7 @@ impl RaftState {
         self.role = RaftRole::Follower;
         self.stop_children(None);
         self.replicate_workers.clear();
+        self.pending_responses.clear();
         self.persist_state().await?;
         self.set_election_timer();
 
@@ -894,19 +937,43 @@ impl RaftState {
     async fn handle_client_request(
         &mut self,
         request: LogEntryValue,
-        reply: RpcReplyPort<bool>,
+        reply: RpcReplyPort<ClientResult>,
     ) -> Result<()> {
         if matches!(self.role, RaftRole::Leader) {
-            self.append_log(request)?;
-            reply.send(true)?;
+            let log_index = self.append_log(request)?;
+            self.pending_responses.insert(log_index, reply);
             return Ok(());
         }
         // Forward to leader
         if let Some(leader) = self.get_leader() {
-            reply.send(ractor::call!(leader, RaftMsg::ClientRequest, request)?)?;
+            // DEADLOCK HAZARD: Leader needs our vote to confirm quorum so we
+            // should not block our actor thread.
+            tokio::spawn(async move {
+                // TODO: add timeout?
+                reply
+                    .send(
+                        ractor::call!(leader, RaftMsg::ClientRequest, request)
+                            .expect("client_request forwarding failed"),
+                    )
+                    .expect("unable to reply to client");
+            });
             return Ok(());
         }
-        reply.send(false)?;
+        Ok(())
+    }
+
+    async fn handle_applied(&mut self, last_applied: u64, result: ClientResult) -> Result<()> {
+        debug_assert!(self.last_applied <= last_applied);
+
+        self.last_applied = last_applied;
+        self.persist_state().await?;
+
+        if let Some(reply) = self.pending_responses.remove(&self.last_applied) {
+            debug!(target: "raft", "index {last_applied} applied, reply to client");
+            if let Err(error) = reply.send(result) {
+                info!(target: "raft", %error, "failed to reply client request");
+            }
+        }
         Ok(())
     }
 
@@ -945,7 +1012,7 @@ impl RaftState {
         })
     }
 
-    fn get_log_entry(&self, index: usize) -> Result<LogEntry> {
+    fn get_log_entry(&self, index: u64) -> Result<LogEntry> {
         block_in_place(|| {
             self.log
                 .get(&index.to_be_bytes())
@@ -957,7 +1024,26 @@ impl RaftState {
         })
     }
 
-    fn append_log(&mut self, value: LogEntryValue) -> Result<()> {
+    // TODO: fail on error?
+    fn log_entry_range(
+        &self,
+        range: impl RangeBounds<u64>,
+    ) -> impl Iterator<Item = Result<LogEntry>> {
+        block_in_place(|| {
+            self.log
+                .range((
+                    range.start_bound().map(|b| b.to_be_bytes()),
+                    range.end_bound().map(|b| b.to_be_bytes()),
+                ))
+                .map(|r| {
+                    r.context("get log entry failed").and_then(|(_, slice)| {
+                        LogEntry::from_bytes(&slice).context("failed to deserialize log entry")
+                    })
+                })
+        })
+    }
+
+    fn append_log(&mut self, value: LogEntryValue) -> Result<u64> {
         let index = self.last_log_index + 1;
         let new_log_entry = LogEntry {
             index,
@@ -972,7 +1058,7 @@ impl RaftState {
         })?;
         self.last_log_index = index;
         self.last_log_term = self.current_term;
-        Ok(())
+        Ok(self.last_log_index)
     }
 
     fn replicate_log_entries(&mut self, entries: &[LogEntry]) -> Result<()> {
@@ -1010,11 +1096,11 @@ impl RaftState {
             current_term: self.current_term,
             commit_index: self.commit_index,
         };
-        for worker in self.replicate_workers.values() {
-            if let Err(ref err) = worker.cast(ReplicateMsg::NotifyStateChange(raft)) {
+        for (id, worker) in self.replicate_workers.iter() {
+            if let Err(error) = worker.cast(ReplicateMsg::NotifyStateChange(raft)) {
                 warn!(
-                    error = err as &dyn Error,
-                    peer = worker.get_id().to_string(),
+                    %error,
+                    peer = id,
                     "notify_state_change failed",
                 );
             }

@@ -9,7 +9,7 @@ xflags::xflags! {
         cmd raft {
             cmd dump {
                 /// Start from index
-                optional --from index: usize
+                optional --from index: u64
             }
         }
         cmd repl {}
@@ -47,7 +47,7 @@ pub enum RaftCmd {
 
 #[derive(Debug)]
 pub struct Dump {
-    pub from: Option<usize>,
+    pub from: Option<u64>,
 }
 
 #[derive(Debug)]

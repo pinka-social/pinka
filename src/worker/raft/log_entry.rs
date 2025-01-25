@@ -3,7 +3,7 @@ use serde_bytes::ByteBuf;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct LogEntry {
-    pub(crate) index: usize,
+    pub(crate) index: u64,
     pub(crate) term: u32,
     pub(crate) value: LogEntryValue,
 }

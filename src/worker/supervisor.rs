@@ -2,8 +2,10 @@ use ractor::{Actor, ActorProcessingErr, ActorRef, SupervisionEvent};
 use ractor_cluster::RactorMessage;
 use tracing::info;
 
+use crate::activity_pub::machine::ActivityPubMachine;
 use crate::config::{RuntimeConfig, ServerConfig};
 use crate::flags::Serve;
+use crate::worker::raft::StateMachineMsg;
 
 use super::cluster::{ClusterMaint, ClusterMaintMsg};
 use super::manhole::{Manhole, ManholeMsg};
@@ -51,6 +53,14 @@ impl Actor for Supervisor {
         .await?;
 
         Actor::spawn_linked(None, RaftServer, config.clone(), myself.get_cell()).await?;
+
+        Actor::spawn_linked(
+            Some("state_machine".into()),
+            ActivityPubMachine,
+            (),
+            myself.get_cell(),
+        )
+        .await?;
 
         Ok(SupervisorState {
             server,
@@ -105,8 +115,21 @@ impl Actor for Supervisor {
                 }
                 if matches!(actor_cell.is_message_type_of::<RaftServerMsg>(), Some(true)) {
                     info!(target: "supervision", error, "raft server crashed, restarting...");
-                    Actor::spawn_linked(None, RaftServer, state.config.clone(), myself.into())
+                    Actor::spawn_linked(None, RaftServer, state.config.clone(), myself.get_cell())
                         .await?;
+                }
+                if matches!(
+                    actor_cell.is_message_type_of::<StateMachineMsg>(),
+                    Some(true)
+                ) {
+                    info!(target: "supervision", error, "state machine crashed, restarting...");
+                    Actor::spawn_linked(
+                        Some("state_machine".into()),
+                        ActivityPubMachine,
+                        (),
+                        myself.get_cell(),
+                    )
+                    .await?;
                 }
             }
             ProcessGroupChanged(_) => {}

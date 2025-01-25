@@ -58,7 +58,7 @@ impl Actor for Manhole {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             ManholeMsg::GetRaftLogEntries(from, reply) => {
-                state.handle_get_raft_log_entries(from as usize, reply)?;
+                state.handle_get_raft_log_entries(from, reply)?;
             }
             ManholeMsg::AppendRaftClusterMessage(msg) => {
                 state.handle_append_raft_cluster_message(msg).await?;
@@ -110,7 +110,7 @@ impl ManholeState {
     }
     fn handle_get_raft_log_entries(
         &self,
-        from: usize,
+        from: u64,
         reply: RpcReplyPort<LogEntryList>,
     ) -> Result<()> {
         // TODO: abstract db operation
@@ -122,7 +122,7 @@ impl ManholeState {
                 .with_kv_separation(KvSeparationOptions::default()),
         )?;
         let mut items = vec![];
-        for entry in log.iter().skip(from) {
+        for entry in log.range(from.to_be_bytes()..) {
             let (_, value) = entry.unwrap();
             let item = LogEntry::from_bytes(&value)?;
             items.push(item);
@@ -136,7 +136,9 @@ impl ManholeState {
             raft_client,
             RaftClientMsg::ClientRequest,
             LogEntryValue::ClusterMessage(msg)
-        )? {
+        )?
+        .is_ok()
+        {
             warn!(target: "manhole", "unable to append raft cluster message");
         }
         Ok(())
