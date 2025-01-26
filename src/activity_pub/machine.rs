@@ -1,16 +1,13 @@
 use anyhow::{Context, Result};
+use minicbor::{Decode, Encode};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
-use serde::{Deserialize, Serialize};
-use serde_bytes::ByteBuf;
-use serde_json::json;
 use tracing::info;
 
 use crate::worker::raft::{
     ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg, get_raft_applied,
 };
 
-use super::model::Object;
-use super::object_serde::{Header, NodeValue};
+use super::object_serde::NodeValue;
 
 pub(crate) struct ActivityPubMachine;
 
@@ -23,22 +20,22 @@ impl Actor for ActivityPubMachine {
 
     async fn pre_start(
         &self,
-        myself: ActorRef<Self::Msg>,
-        args: Self::Arguments,
+        _myself: ActorRef<Self::Msg>,
+        _args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         Ok(State {})
     }
 
     async fn handle(
         &self,
-        myself: ActorRef<Self::Msg>,
+        _myself: ActorRef<Self::Msg>,
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         let reply = get_raft_applied()?;
         match message {
             StateMachineMsg::Apply(log_entry) => match log_entry.value {
-                LogEntryValue::Bytes(byte_buf) => {
+                LogEntryValue::Command(byte_buf) => {
                     let command = ActivityPubCommand::from_bytes(&byte_buf)?;
                     let result = state.handle_command(command).await?;
                     ractor::cast!(reply, RaftAppliedMsg::Applied(log_entry.index, result))?;
@@ -55,34 +52,26 @@ impl Actor for ActivityPubMachine {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Encode, Decode)]
 pub(crate) enum ActivityPubCommand {
     /// Client to Server - Create Activity
-    Create(Object),
+    #[n(0)]
+    Create(#[n(0)] NodeValue),
 }
 
 impl ActivityPubCommand {
     fn into_bytes(self) -> Result<Vec<u8>> {
-        let header = vec![];
-        let payload =
-            postcard::to_extend(&Header::V_1, header).context("unable to serialize RPC header")?;
-        let result = postcard::to_extend(&self, payload).context("unable to serialize payload")?;
-        Ok(result)
+        Ok(minicbor::to_vec(&self).context("unable to serialize apub command")?)
     }
 
     fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        let (header, payload): (Header, _) =
-            postcard::take_from_bytes(bytes).context("unable to deserialize RPC header")?;
-        if header != Header::V_1 {
-            tracing::error!(target: "rpc", ?header, "invalid RPC header version");
-        }
-        Ok(postcard::from_bytes(&payload).context("unable to deserialize payload")?)
+        Ok(minicbor::decode(bytes).context("unable to deserialize apub command")?)
     }
 }
 
 impl From<ActivityPubCommand> for LogEntryValue {
     fn from(value: ActivityPubCommand) -> Self {
-        LogEntryValue::Bytes(value.into_bytes().unwrap().into())
+        LogEntryValue::Command(value.into_bytes().unwrap().into())
     }
 }
 

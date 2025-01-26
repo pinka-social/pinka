@@ -2,6 +2,7 @@ mod client;
 mod log_entry;
 mod replicate;
 mod rpc;
+mod state;
 mod state_machine;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,6 +19,7 @@ use self::rpc::{
     AdvanceCommitIndexMsg, AppendEntriesAsk, AppendEntriesReply, PeerId, RequestVoteAsk,
     RequestVoteReply,
 };
+use self::state::RaftSaved;
 pub(crate) use self::state_machine::{RaftAppliedMsg, StateMachineMsg, get_raft_applied};
 
 use anyhow::{Context, Result, anyhow};
@@ -25,7 +27,6 @@ use fjall::{KvSeparationOptions, PartitionCreateOptions, PartitionHandle};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent, pg};
 use ractor_cluster::{RactorClusterMessage, RactorMessage};
 use rand::{Rng, thread_rng};
-use serde::{Deserialize, Serialize};
 use tokio::select;
 use tokio::sync::mpsc::{Sender, channel};
 use tokio::task::block_in_place;
@@ -115,25 +116,6 @@ struct RaftShared {
     /// (initialized to 0, increases monotonically).
     commit_index: u64,
 }
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct RaftSaved {
-    /// Latest term this worker has seen (initialized to 0 on first boot,
-    /// increases monotonically).
-    ///
-    /// Updated on stable storage before responding to RPCs.
-    current_term: u32,
-
-    /// CandidateId that received vote in current term (or None if none).
-    ///
-    /// Updated on stable storage before responding to RPCs.
-    voted_for: Option<PeerId>,
-
-    /// Last applied log entry index
-    last_applied: u64,
-}
-
-impl RaftSerDe for RaftSaved {}
 
 struct RaftState {
     /// Actor reference
@@ -315,7 +297,7 @@ impl Actor for RaftWorker {
                 if state.config.server.observer {
                     return Ok(());
                 }
-                state.advance_commit_index(peer_info)?;
+                state.advance_commit_index(peer_info).await?;
             }
             UpdateTerm(new_term) => {
                 state.update_term(new_term).await?;
@@ -444,16 +426,24 @@ impl RaftState {
             Ok(Some(value)) => RaftSaved::from_bytes(&value),
             _ => Ok(RaftSaved::default()),
         })?;
+
+        let RaftSaved {
+            current_term,
+            voted_for,
+            last_applied,
+        } = saved;
+
         info!(
             target: "raft",
-            current_term = saved.current_term,
-            voted_for = saved.voted_for,
+            current_term,
+            voted_for,
+            last_applied,
             "restored from state"
         );
-        self.current_term = saved.current_term;
-        self.voted_for = saved.voted_for;
-        self.last_queued = saved.last_applied;
-        self.last_applied = saved.last_applied;
+        self.current_term = current_term;
+        self.voted_for = voted_for;
+        self.last_queued = last_applied;
+        self.last_applied = last_applied;
 
         if let Ok(last_log) = self.get_last_log_entry() {
             info!(
@@ -655,7 +645,7 @@ impl RaftState {
         }
     }
 
-    fn advance_commit_index(&mut self, peer_info: AdvanceCommitIndexMsg) -> Result<()> {
+    async fn advance_commit_index(&mut self, peer_info: AdvanceCommitIndexMsg) -> Result<()> {
         if thread_rng().gen_bool(1.0 / 10000.0) {
             panic!("simulated crash");
         }
@@ -676,23 +666,12 @@ impl RaftState {
         if let Ok(entry) = log_entry {
             if entry.term == self.current_term {
                 self.commit_index = new_commit_index;
-                trace!(target: "raft", "new commit_index: {}", self.commit_index);
+                info!(target: "raft", "new commit_index: {}", self.commit_index);
                 self.notify_state_change();
             }
         }
 
-        debug_assert!(self.last_queued >= self.last_applied);
-        debug_assert!(self.commit_index >= self.last_queued);
-
-        // TODO configurable machine name
-        if let Some(cell) = ActorRef::where_is("state_machine".into()) {
-            let machine: ActorRef<StateMachineMsg> = cell.into();
-            // TODO avoid message pile up
-            for log_entry in self.log_entry_range(self.last_queued..=self.commit_index) {
-                ractor::cast!(machine, StateMachineMsg::Apply(log_entry?))?;
-            }
-            self.last_queued = self.commit_index;
-        }
+        self.apply_log_entries().await?;
 
         Ok(())
     }
@@ -812,6 +791,7 @@ impl RaftState {
             if let Err(error) = reply.send(response) {
                 warn!(target: "rpc", %error, "send response to append_entries failed");
             }
+            self.apply_log_entries().await?;
             return Ok(());
         }
         if !request.entries.is_empty()
@@ -834,6 +814,7 @@ impl RaftState {
             if let Err(error) = reply.send(response) {
                 warn!(target: "rpc", %error, "send response to append_entries failed");
             }
+            self.apply_log_entries().await?;
             return Ok(());
         }
 
@@ -970,12 +951,32 @@ impl RaftState {
         self.last_applied = last_applied;
         self.persist_state().await?;
 
+        info!(target: "raft", last_queued=self.last_queued, last_applied=self.last_applied, "applied");
+
         if let Some(reply) = self.pending_responses.remove(&self.last_applied) {
             debug!(target: "raft", "index {last_applied} applied, reply to client");
             if let Err(error) = reply.send(result) {
                 info!(target: "raft", %error, "failed to reply client request");
             }
         }
+        Ok(())
+    }
+
+    async fn apply_log_entries(&mut self) -> Result<()> {
+        debug_assert!(self.last_queued >= self.last_applied);
+
+        // TODO configurable machine name
+        if let Some(cell) = ActorRef::where_is("state_machine".into()) {
+            let machine: ActorRef<StateMachineMsg> = cell.into();
+            // TODO avoid message pile up
+            for log_entry in self.log_entry_range(self.last_queued + 1..=self.commit_index) {
+                ractor::cast!(machine, StateMachineMsg::Apply(log_entry?))?;
+            }
+            self.last_queued = u64::max(self.last_queued, self.commit_index);
+        } else {
+            warn!(target: "raft", "unable to apply log entries because state_machine is not running");
+        }
+        trace!(target: "raft", last_queued=self.last_queued, last_applied=self.last_applied, "queued");
         Ok(())
     }
 
@@ -1098,6 +1099,7 @@ impl RaftState {
             current_term: self.current_term,
             commit_index: self.commit_index,
         };
+        info!(target: "raft", ?raft, "notify state change");
         for (id, worker) in self.replicate_workers.iter() {
             if let Err(error) = worker.cast(ReplicateMsg::NotifyStateChange(raft)) {
                 warn!(

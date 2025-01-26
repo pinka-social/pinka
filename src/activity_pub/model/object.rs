@@ -1,7 +1,6 @@
 //! Storage friendly presentation of Activity Streams' core data model.
 
 use anyhow::{Result, bail};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

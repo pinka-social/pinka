@@ -10,7 +10,7 @@ use tokio::net::TcpListener;
 
 use crate::activity_pub::ActorRepo;
 use crate::activity_pub::machine::ActivityPubCommand;
-use crate::activity_pub::model::{Actor, Create, JsonLdValue, Object};
+use crate::activity_pub::model::{JsonLdValue, Object};
 use crate::config::RuntimeConfig;
 use crate::worker::raft::{LogEntryValue, RaftClientMsg, get_raft_local_client};
 
@@ -49,7 +49,7 @@ async fn post_outbox(
         // Send request to state machine. We must first persist the object, then
         // persist the activity, then update indexes.
         let client = get_raft_local_client().map_err(ise)?;
-        let command = ActivityPubCommand::Create(object);
+        let command = ActivityPubCommand::Create(object.into());
         ractor::call!(
             client,
             RaftClientMsg::ClientRequest,

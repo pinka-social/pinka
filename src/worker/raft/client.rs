@@ -1,8 +1,7 @@
 use anyhow::{Context, Result, bail};
+use minicbor::{Decode, Encode};
 use ractor::{ActorRef, DerivedActorRef, RpcReplyPort};
 use ractor_cluster::RactorClusterMessage;
-use serde::{Deserialize, Serialize};
-use serde_bytes::ByteBuf;
 
 use crate::worker::raft::RaftWorker;
 
@@ -32,23 +31,25 @@ impl From<RaftMsg> for RaftClientMsg {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Encode, Decode)]
 pub(crate) enum ClientResult {
-    Ok(ByteBuf),
-    Err(ByteBuf),
+    #[n(0)]
+    Ok(#[cbor(n(0), with = "minicbor::bytes")] Vec<u8>),
+    #[n(1)]
+    Err(#[cbor(n(0), with = "minicbor::bytes")] Vec<u8>),
 }
 
 impl ClientResult {
     pub(crate) fn ok() -> ClientResult {
-        ClientResult::Ok(ByteBuf::new())
+        ClientResult::Ok(vec![])
     }
     pub(crate) fn is_ok(&self) -> bool {
         matches!(self, ClientResult::Ok(_))
     }
 }
 
-impl From<ByteBuf> for ClientResult {
-    fn from(value: ByteBuf) -> Self {
+impl From<Vec<u8>> for ClientResult {
+    fn from(value: Vec<u8>) -> Self {
         ClientResult::Ok(value)
     }
 }

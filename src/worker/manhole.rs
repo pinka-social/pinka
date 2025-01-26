@@ -6,9 +6,7 @@ use tracing::warn;
 
 use crate::config::{RuntimeConfig, ServerConfig};
 
-use self::raft::RaftClientMsg;
-
-use super::raft::{self, LogEntry, LogEntryList, LogEntryValue, RaftSerDe};
+use super::raft::{self, LogEntry, LogEntryList, LogEntryValue, RaftClientMsg, RaftSerDe};
 
 pub(super) struct Manhole;
 

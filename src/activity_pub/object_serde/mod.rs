@@ -1,18 +1,16 @@
 mod symbols;
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use minicbor::data::Type;
+use minicbor::{Decode, Encode};
 use serde_json::{Number, Value};
 
 use self::symbols::activitystreams_symbol_table;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Deserialize, Serialize)]
-pub(crate) struct Header {
-    version: u32,
-}
-
-impl Header {
-    pub(crate) const V_1: Header = Header { version: 1 };
+#[derive(Debug, Encode, Decode)]
+enum Envelope {
+    #[n(0)]
+    V1(#[n(0)] NodeValue),
 }
 
 pub(crate) trait ObjectSerDe {
@@ -20,65 +18,22 @@ pub(crate) trait ObjectSerDe {
     where
         Self: Into<NodeValue>,
     {
-        let header = vec![];
-        let payload =
-            postcard::to_extend(&Header::V_1, header).context("unable to serialize RPC header")?;
-        let result =
-            postcard::to_extend(&self.into(), payload).context("unable to serialize payload")?;
-        Ok(result)
+        Ok(minicbor::to_vec(&Envelope::V1(self.into())).context("unable to serialize payload")?)
     }
 
     fn from_bytes(bytes: &[u8]) -> Result<Self>
     where
         Self: From<NodeValue>,
     {
-        let (header, payload): (Header, _) =
-            postcard::take_from_bytes(bytes).context("unable to deserialize RPC header")?;
-        if header != Header::V_1 {
-            tracing::error!(target: "rpc", ?header, "invalid RPC header version");
-        }
-        Ok(Self::from(
-            postcard::from_bytes(&payload).context("unable to deserialize payload")?,
-        ))
+        let Envelope::V1(value) =
+            minicbor::decode(bytes).context("unable to deserialize payload")?;
+        Ok(Self::from(value))
     }
 }
 
 macro_rules! impl_object_serde_new_type {
     ($typ:ident) => {
         impl crate::activity_pub::object_serde::ObjectSerDe for $typ {}
-        impl serde::Serialize for $typ {
-            fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-            where
-                S: serde::Serializer,
-            {
-                use crate::activity_pub::object_serde::ObjectSerDe;
-                serializer.serialize_bytes(&self.clone().into_bytes().unwrap())
-            }
-        }
-        impl<'de> serde::Deserialize<'de> for $typ {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct ObjectVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for ObjectVisitor {
-                    type Value = $typ;
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                        formatter.write_str(stringify!($typ))
-                    }
-                    fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        use crate::activity_pub::object_serde::ObjectSerDe;
-                        Ok($typ::from_bytes(v).map_err(|e| E::custom(e))?)
-                    }
-                }
-
-                deserializer.deserialize_bytes(ObjectVisitor)
-            }
-        }
         impl From<$typ> for crate::activity_pub::object_serde::NodeValue {
             fn from(value: $typ) -> Self {
                 value.0.into()
@@ -108,13 +63,44 @@ macro_rules! impl_object_serde_new_type {
     };
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug)]
 pub(crate) enum Symbol {
-    SymbolId(usize),
+    SymbolId(u64),
     Text(String),
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+impl<C> Encode<C> for Symbol {
+    fn encode<W: minicbor::encode::Write>(
+        &self,
+        e: &mut minicbor::Encoder<W>,
+        _ctx: &mut C,
+    ) -> std::result::Result<(), minicbor::encode::Error<W::Error>> {
+        match self {
+            Symbol::SymbolId(id) => {
+                e.encode(id)?;
+            }
+            Symbol::Text(text) => {
+                e.encode(text)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<'b, C> Decode<'b, C> for Symbol {
+    fn decode(
+        d: &mut minicbor::Decoder<'b>,
+        _ctx: &mut C,
+    ) -> std::result::Result<Self, minicbor::decode::Error> {
+        match d.datatype()? {
+            Type::U8 | Type::U16 | Type::U32 | Type::U64 => Ok(Symbol::SymbolId(d.decode()?)),
+            Type::String => Ok(Symbol::Text(d.decode()?)),
+            ty @ _ => Err(minicbor::decode::Error::type_mismatch(ty)),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub(crate) enum NodeValue {
     Null,
     Bool(bool),
@@ -122,6 +108,77 @@ pub(crate) enum NodeValue {
     Symbol(Symbol),
     Array(Vec<NodeValue>),
     Object(Vec<(Symbol, NodeValue)>),
+}
+
+impl<C> Encode<C> for NodeValue {
+    fn encode<W: minicbor::encode::Write>(
+        &self,
+        e: &mut minicbor::Encoder<W>,
+        _ctx: &mut C,
+    ) -> std::result::Result<(), minicbor::encode::Error<W::Error>> {
+        match self {
+            NodeValue::Null => {
+                e.null()?;
+            }
+            NodeValue::Bool(x) => {
+                e.bool(*x)?;
+            }
+            NodeValue::Number(x) => {
+                e.f64(*x)?;
+            }
+            NodeValue::Symbol(symbol) => {
+                e.encode(symbol)?;
+            }
+            NodeValue::Array(node_values) => {
+                e.array(node_values.len() as u64)?;
+                for v in node_values {
+                    e.encode(v)?;
+                }
+            }
+            NodeValue::Object(items) => {
+                e.map(items.len() as u64)?;
+                for (k, v) in items {
+                    e.encode(k)?;
+                    e.encode(v)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<'b, C> Decode<'b, C> for NodeValue {
+    fn decode(
+        d: &mut minicbor::Decoder<'b>,
+        _ctx: &mut C,
+    ) -> std::result::Result<Self, minicbor::decode::Error> {
+        match d.datatype()? {
+            Type::Null => {
+                d.null()?;
+                Ok(NodeValue::Null)
+            }
+            Type::Bool => Ok(NodeValue::Bool(d.decode()?)),
+            Type::F64 => Ok(NodeValue::Number(d.decode()?)),
+            Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::String => {
+                Ok(NodeValue::Symbol(d.decode()?))
+            }
+            Type::Array => {
+                let mut node_values = vec![];
+                for x in d.array_iter()? {
+                    node_values.push(x?);
+                }
+                Ok(NodeValue::Array(node_values))
+            }
+            Type::Map => {
+                let mut items = vec![];
+                for x in d.map_iter()? {
+                    items.push(x?);
+                }
+                Ok(NodeValue::Object(items))
+            }
+            ty @ _ => Err(minicbor::decode::Error::type_mismatch(ty)),
+        }
+    }
 }
 
 fn lossy_number_to_f64(number: Number) -> f64 {
