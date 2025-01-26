@@ -9,20 +9,19 @@ default-run = "pinka"
 [dependencies]
 anyhow = "1.0"
 axum = "0.8.1"
+base62 = "2.2.1"
 bimap = "0.6.3"
 fd-lock = "4.0.2"
 fjall = "2.4"
 futures = "0.3.31"
-postcard = { version = "1.1.1", default-features = false, features = [
-    "use-std",
-] }
+jiff = "0.1.26"
+minicbor = { version = "0.25.1", features = ["derive", "alloc"] }
 ractor = { version = "0.14.6", features = ["cluster"] }
 ractor_cluster = { version = "0.14.6" }
 rand = "0.8.5"
 rustls-pki-types = { version = "1.10.1", features = ["std"] }
 rustls-platform-verifier = "0.5.0"
 serde = { version = "1.0", features = ["derive"] }
-serde_bytes = "0.11.15"
 serde_json = "1.0"
 tokio = { version = "1.42", features = [
     "fs",
@@ -35,6 +34,7 @@ tokio-rustls = "0.26.1"
 toml = "0.8.19"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
+uuid = { version = "1.12.1", features = ["v7"] }
 xflags = "0.3.2"
 
 [dev-dependencies]

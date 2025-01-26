@@ -1,17 +1,10 @@
 use anyhow::{Error, Result, bail};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::config::ActivityPubConfig;
 
-use super::{NodeValue, ObjectSerDe};
-
-pub(crate) fn get_iri(config: &ActivityPubConfig, local_id: &str) -> String {
-    format!("{}/users/{}", config.base_url, local_id)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub(crate) struct Actor(pub(crate) Value);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Actor(Value);
 
 impl TryFrom<Value> for Actor {
     type Error = Error;
@@ -58,25 +51,7 @@ impl Actor {
     }
 }
 
-impl ObjectSerDe for Actor {}
-
-impl From<Actor> for NodeValue {
-    fn from(value: Actor) -> Self {
-        value.0.into()
-    }
-}
-
-impl From<NodeValue> for Actor {
-    fn from(value: NodeValue) -> Self {
-        Actor(value.into())
-    }
-}
-
-impl From<Actor> for Value {
-    fn from(value: Actor) -> Self {
-        value.0
-    }
-}
+impl_object_serde_new_type!(Actor);
 
 #[cfg(test)]
 mod tests {

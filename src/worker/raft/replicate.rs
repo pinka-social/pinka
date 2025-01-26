@@ -9,9 +9,8 @@ use tokio::task::block_in_place;
 use tracing::{info, trace, warn};
 
 use super::log_entry::LogEntry;
-use super::{
-    AdvanceCommitIndexMsg, AppendEntriesAsk, RaftMsg, RaftSerDe, RaftShared, RuntimeConfig,
-};
+use super::rpc::RaftSerDe;
+use super::{AdvanceCommitIndexMsg, AppendEntriesAsk, RaftMsg, RaftShared, RuntimeConfig};
 
 pub(super) struct ReplicateWorker;
 

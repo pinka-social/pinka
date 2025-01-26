@@ -2,7 +2,7 @@ use ractor::{Actor, ActorProcessingErr, ActorRef, SupervisionEvent};
 use ractor_cluster::RactorMessage;
 use tracing::info;
 
-use crate::activity_pub::machine::ActivityPubMachine;
+use crate::activity_pub::machine::{ActivityPubMachine, ActivityPubMachineInit};
 use crate::config::{RuntimeConfig, ServerConfig};
 use crate::flags::Serve;
 use crate::worker::raft::StateMachineMsg;
@@ -57,7 +57,9 @@ impl Actor for Supervisor {
         Actor::spawn_linked(
             Some("state_machine".into()),
             ActivityPubMachine,
-            (),
+            ActivityPubMachineInit {
+                keyspace: config.keyspace.clone(),
+            },
             myself.get_cell(),
         )
         .await?;
@@ -126,7 +128,9 @@ impl Actor for Supervisor {
                     Actor::spawn_linked(
                         Some("state_machine".into()),
                         ActivityPubMachine,
-                        (),
+                        ActivityPubMachineInit {
+                            keyspace: state.config.keyspace.clone(),
+                        },
                         myself.get_cell(),
                     )
                     .await?;

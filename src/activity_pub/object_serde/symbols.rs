@@ -2,13 +2,13 @@ use std::sync::OnceLock;
 
 use bimap::BiBTreeMap;
 
-static SYMBOL_TABLE: OnceLock<BiBTreeMap<&str, usize>> = OnceLock::new();
+static SYMBOL_TABLE: OnceLock<BiBTreeMap<&str, u64>> = OnceLock::new();
 
-pub(super) fn activitystreams_symbol_table() -> &'static BiBTreeMap<&'static str, usize> {
+pub(super) fn activitystreams_symbol_table() -> &'static BiBTreeMap<&'static str, u64> {
     SYMBOL_TABLE.get_or_init(|| {
         let mut bimap = BiBTreeMap::new();
         for (index, &symbol) in SYMBOLS.iter().enumerate() {
-            bimap.insert(symbol, index);
+            bimap.insert(symbol, index as u64);
         }
         bimap
     })
