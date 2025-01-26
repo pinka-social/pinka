@@ -8,9 +8,9 @@ use axum::{Json, Router};
 use serde_json::Value;
 use tokio::net::TcpListener;
 
-use crate::activity_pub::ActorRepo;
 use crate::activity_pub::machine::ActivityPubCommand;
 use crate::activity_pub::model::{JsonLdValue, Object};
+use crate::activity_pub::{ActivityRepo, ActorRepo};
 use crate::config::RuntimeConfig;
 use crate::worker::raft::{LogEntryValue, RaftClientMsg, get_raft_local_client};
 
@@ -19,7 +19,7 @@ use self::iri::get_actor_iri;
 pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
     let app = Router::new()
         .route("/users/{id}", get(get_actor))
-        .route("/users/{id}/outbox", post(post_outbox))
+        .route("/users/{id}/outbox", get(get_outbox).post(post_outbox))
         .with_state(config.clone());
     let listener = TcpListener::bind(format!("0.0.0.0:{}", config.server.http_port)).await?;
     axum::serve(listener, app).await?;
@@ -30,13 +30,27 @@ async fn get_actor(
     State(config): State<RuntimeConfig>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
-    let store = ActorRepo::new(config.keyspace.clone()).map_err(ise)?;
+    let repo = ActorRepo::new(config.keyspace.clone()).map_err(ise)?;
     let iri = get_actor_iri(&config.init.activity_pub, &id);
-    if let Some(raw_actor) = store.find_one(&iri).map_err(ise)? {
+    if let Some(raw_actor) = repo.find_one(&iri).map_err(ise)? {
         let actor = raw_actor.enrich_with(&config.init.activity_pub);
         return Ok(Json(actor.into()));
     }
     Err(StatusCode::NOT_FOUND)
+}
+
+async fn get_outbox(
+    State(config): State<RuntimeConfig>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    let repo = ActivityRepo::new(config.keyspace.clone()).map_err(ise)?;
+    let acts = repo
+        .all()
+        .map_err(ise)?
+        .into_iter()
+        .map(|obj| obj.into())
+        .collect();
+    Ok(Json(Value::Array(acts)))
 }
 
 async fn post_outbox(

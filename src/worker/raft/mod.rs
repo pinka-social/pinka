@@ -435,8 +435,8 @@ impl RaftState {
 
         info!(
             target: "raft",
-            current_term,
             voted_for,
+            current_term,
             last_applied,
             "restored from state"
         );
@@ -448,8 +448,8 @@ impl RaftState {
         if let Ok(last_log) = self.get_last_log_entry() {
             info!(
                 target: "raft",
-                last_log_index = last_log.index,
                 last_log_term = last_log.term,
+                last_log_index = last_log.index,
                 "restored from log"
             );
             self.last_log_index = last_log.index;

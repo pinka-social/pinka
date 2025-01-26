@@ -32,30 +32,30 @@ pub(crate) trait ObjectSerDe {
 }
 
 macro_rules! impl_object_serde_new_type {
-    ($typ:ident) => {
-        impl crate::activity_pub::object_serde::ObjectSerDe for $typ {}
-        impl From<$typ> for crate::activity_pub::object_serde::NodeValue {
-            fn from(value: $typ) -> Self {
+    ($ty:ident) => {
+        impl crate::activity_pub::object_serde::ObjectSerDe for $ty {}
+        impl From<$ty> for crate::activity_pub::object_serde::NodeValue {
+            fn from(value: $ty) -> Self {
                 value.0.into()
             }
         }
-        impl From<crate::activity_pub::object_serde::NodeValue> for $typ {
+        impl From<crate::activity_pub::object_serde::NodeValue> for $ty {
             fn from(value: crate::activity_pub::object_serde::NodeValue) -> Self {
-                $typ(value.into())
+                $ty(value.into())
             }
         }
-        impl From<$typ> for serde_json::Value {
-            fn from(value: $typ) -> Self {
+        impl From<$ty> for serde_json::Value {
+            fn from(value: $ty) -> Self {
                 value.0
             }
         }
-        impl std::ops::Deref for $typ {
+        impl std::ops::Deref for $ty {
             type Target = serde_json::Value;
             fn deref(&self) -> &Self::Target {
                 &self.0
             }
         }
-        impl std::ops::DerefMut for $typ {
+        impl std::ops::DerefMut for $ty {
             fn deref_mut(&mut self) -> &mut Self::Target {
                 &mut self.0
             }

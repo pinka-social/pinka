@@ -56,6 +56,12 @@ impl TryFrom<Object> for Create {
 
 impl_object_serde_new_type!(Create);
 
+impl From<Create> for Object {
+    fn from(value: Create) -> Self {
+        Object(value.0)
+    }
+}
+
 impl Create {
     pub(crate) fn with_actor(mut self, actor_iri: &str) -> Self {
         let map = self.0.as_object_mut().unwrap();
@@ -73,6 +79,10 @@ impl Create {
         let obj_map = map.get_mut("object").unwrap().as_object_mut().unwrap();
         obj_map.insert("published".to_string(), Value::String(ts.to_string()));
         self
+    }
+    pub(crate) fn to_inner(&self) -> Object {
+        let objv = self.0.get("object").unwrap();
+        Object(objv.clone())
     }
 }
 

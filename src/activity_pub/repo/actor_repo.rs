@@ -41,7 +41,7 @@ mod tests {
     fn insert_then_find() -> Result<()> {
         let tmp_dir = tempdir()?;
         let keyspace = Keyspace::open(Config::new(tmp_dir.path()).temporary(true))?;
-        let store = ActorRepo::new(keyspace)?;
+        let repo = ActorRepo::new(keyspace)?;
         let actor = Actor::try_from(json!(
             {
                 "@context": ["https://www.w3.org/ns/activitystreams",
@@ -57,8 +57,8 @@ mod tests {
               }
         ))?;
         let iri = "https://kenzoishii.example.com/";
-        store.insert(iri, actor.clone())?;
-        assert_eq!(Some(actor), store.find_one(iri)?);
+        repo.insert(iri, actor.clone())?;
+        assert_eq!(Some(actor), repo.find_one(iri)?);
         Ok(())
     }
 }

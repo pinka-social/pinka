@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Object(Value);
+pub(crate) struct Object(pub(super) Value);
 
 impl TryFrom<Value> for Object {
     type Error = anyhow::Error;
@@ -58,5 +58,8 @@ impl Object {
             }
         }
         false
+    }
+    pub(crate) fn id(&self) -> Option<String> {
+        self.0.get("id").and_then(Value::as_str).map(str::to_owned)
     }
 }
