@@ -16,8 +16,8 @@ use tokio::signal::unix::{SignalKind, signal};
 use tracing::{error, info};
 
 use self::config::{
-    ActivityPubConfig, ClusterConfig, Config, DatabaseConfig, ManholeConfig, RaftConfig,
-    ReplConfig, RuntimeConfig, ServerConfig,
+    ActivityPubConfig, ClusterConfig, Config, DatabaseConfig, HttpConfig, ManholeConfig,
+    RaftConfig, ReplConfig, RuntimeConfig, ServerConfig,
 };
 use self::flags::{Dump, Pinka, PinkaCmd, RaftCmd, Serve};
 use self::worker::Supervisor;
@@ -45,11 +45,14 @@ async fn main() -> Result<()> {
                     name: "s1".into(),
                     hostname: "localhost".into(),
                     port: 8001,
-                    http_port: 7001,
                     server_cert_chain: vec!["s1.pem".into()],
                     server_key: Some("s1.key".into()),
                     client_cert_chain: vec!["s1.pem".into()],
                     client_key: Some("s1.key".into()),
+                    http: HttpConfig {
+                        listen: true,
+                        port: 7001,
+                    },
                     ..Default::default()
                 },
                 ServerConfig {
@@ -60,6 +63,10 @@ async fn main() -> Result<()> {
                     server_key: Some("s2.key".into()),
                     client_cert_chain: vec!["s2.pem".into()],
                     client_key: Some("s2.key".into()),
+                    http: HttpConfig {
+                        listen: true,
+                        port: 7002,
+                    },
                     ..Default::default()
                 },
                 ServerConfig {
@@ -70,17 +77,25 @@ async fn main() -> Result<()> {
                     server_key: Some("s3.key".into()),
                     client_cert_chain: vec!["s3.pem".into()],
                     client_key: Some("s3.key".into()),
+                    http: HttpConfig {
+                        listen: true,
+                        port: 7003,
+                    },
                     ..Default::default()
                 },
                 ServerConfig {
                     name: "s4".into(),
                     hostname: "localhost".into(),
                     port: 8004,
-                    observer: true,
+                    readonly_replica: true,
                     server_cert_chain: vec!["s4.pem".into()],
                     server_key: Some("s4.key".into()),
                     client_cert_chain: vec!["s4.pem".into()],
                     client_key: Some("s4.key".into()),
+                    http: HttpConfig {
+                        listen: true,
+                        port: 7004,
+                    },
                     ..Default::default()
                 },
             ],

@@ -273,13 +273,13 @@ impl Actor for RaftWorker {
 
         match message {
             RequestVote(request) => {
-                if state.config.server.observer {
+                if state.config.server.readonly_replica {
                     return Ok(());
                 }
                 state.handle_request_vote(request).await?;
             }
             RequestVoteResponse(reply) => {
-                if state.config.server.observer {
+                if state.config.server.readonly_replica {
                     return Ok(());
                 }
                 state.handle_request_vote_response(reply).await?;
@@ -288,13 +288,13 @@ impl Actor for RaftWorker {
                 state.handle_append_entries(request, reply).await?;
             }
             ElectionTimeout => {
-                if state.config.server.observer {
+                if state.config.server.readonly_replica {
                     return Ok(());
                 }
                 state.start_new_election().await?;
             }
             AdvanceCommitIndex(peer_info) => {
-                if state.config.server.observer {
+                if state.config.server.readonly_replica {
                     return Ok(());
                 }
                 state.advance_commit_index(peer_info).await?;
@@ -504,7 +504,7 @@ impl RaftState {
         let observer = self
             .server_config_for(&server_name)
             .with_context(|| format!("server {server_name} is not defined in config"))?
-            .observer;
+            .readonly_replica;
 
         info!(target: "raft", peer = server_name, observer, "spawn replicate worker");
         let args = ReplicateArgs {
@@ -541,7 +541,7 @@ impl RaftState {
             .cluster
             .servers
             .iter()
-            .filter(|s| !s.observer)
+            .filter(|s| !s.readonly_replica)
             .count();
         if cluster_size == 1 {
             return true;
@@ -619,7 +619,7 @@ impl RaftState {
             if self
                 .server_config_for(&peer.get_name().unwrap())
                 .unwrap()
-                .observer
+                .readonly_replica
             {
                 continue;
             }
@@ -1088,7 +1088,7 @@ impl RaftState {
     fn reset_match_index(&mut self) {
         self.match_index.clear();
         for server in &self.config.init.cluster.servers {
-            if !server.observer {
+            if !server.readonly_replica {
                 self.match_index.insert(server.name.clone(), 0);
             }
         }

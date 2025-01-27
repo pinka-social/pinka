@@ -39,14 +39,30 @@ pub(crate) struct ServerConfig {
     pub(crate) name: String,
     pub(crate) hostname: String,
     pub(crate) port: u16,
-    pub(crate) http_port: u16,
-    pub(crate) observer: bool,
+    pub(crate) readonly_replica: bool,
     pub(crate) server_ca_certs: Vec<PathBuf>,
     pub(crate) server_cert_chain: Vec<PathBuf>,
     pub(crate) server_key: Option<PathBuf>,
     pub(crate) client_ca_certs: Vec<PathBuf>,
     pub(crate) client_cert_chain: Vec<PathBuf>,
     pub(crate) client_key: Option<PathBuf>,
+    pub(crate) http: HttpConfig,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub(crate) struct HttpConfig {
+    pub(crate) listen: bool,
+    pub(crate) port: u16,
+}
+
+impl Default for HttpConfig {
+    fn default() -> Self {
+        Self {
+            listen: true,
+            port: 80,
+        }
+    }
 }
 
 #[derive(Clone, Default, Debug, Deserialize)]

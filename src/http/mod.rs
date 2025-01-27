@@ -7,6 +7,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::Value;
 use tokio::net::TcpListener;
+use tracing::info;
 
 use crate::activity_pub::machine::ActivityPubCommand;
 use crate::activity_pub::model::{JsonLdValue, Object};
@@ -17,11 +18,15 @@ use crate::worker::raft::{LogEntryValue, RaftClientMsg, get_raft_local_client};
 use self::iri::get_actor_iri;
 
 pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
+    if !config.server.http.listen {
+        info!(target: "http", "http API server is disabled");
+        return Ok(());
+    }
     let app = Router::new()
         .route("/users/{id}", get(get_actor))
         .route("/users/{id}/outbox", get(get_outbox).post(post_outbox))
         .with_state(config.clone());
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", config.server.http_port)).await?;
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", config.server.http.port)).await?;
     axum::serve(listener, app).await?;
     Ok(())
 }
