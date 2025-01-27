@@ -31,3 +31,24 @@ Optionally index by actor id?
 
 [AS2]: https://www.w3.org/TR/activitystreams-core/
 [AP]: https://www.w3.org/TR/activitypub/
+
+## References
+
+* <https://www.w3.org/TR/activitypub/>
+* <https://www.w3.org/TR/activitystreams-core/>
+* <https://www.w3.org/TR/activitystreams-vocabulary/>
+* <https://www.w3.org/ns/activitystreams>
+* <https://www.w3.org/TR/json-ld1/>
+* <https://www.w3.org/TR/json-ld11/>
+* <https://www.w3.org/TR/json-ld11-api/>
+* <https://docs.joinmastodon.org/spec/activitypub/>
+* <https://socialhub.activitypub.rocks/t/activitypub-a-linked-data-spec-or-json-spec-with-linked-data-profile/3647>
+* <https://g0v.social/@aud@fire.asta.lgbt/113386580058852762>
+* <https://socialhub.activitypub.rocks/t/guide-for-new-activitypub-implementers/479>
+* <https://www.jeremydormitzer.com/blog/more-than-json.html>
+* <https://crates.io/crates/json-ld>
+* <https://crates.io/crates/activitypub_federation>
+* <https://raft.github.io/>
+* <https://github.com/madsim-rs/madsim>
+* <https://github.com/rabbitmq/ra/blob/main/docs/internals/INTERNALS.md>
+* <https://eli.thegreenplace.net/2020/implementing-raft-part-2-commands-and-log-replication/>
