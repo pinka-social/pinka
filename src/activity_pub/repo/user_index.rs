@@ -1,16 +1,39 @@
 use anyhow::Result;
-use fjall::{Keyspace, PartitionCreateOptions, PartitionHandle};
+use fjall::{Batch, Keyspace, PartitionCreateOptions, PartitionHandle, UserKey};
 use uuid::Uuid;
 
 use crate::activity_pub::model::{Actor, Object};
 
-use super::{ObjectRepo, make_object_key};
+use super::{ObjectKey, ObjectRepo, make_object_key, uuidgen};
+
+struct FollowerKey {
+    uid: String,
+    sort_key: Uuid,
+}
+
+impl FollowerKey {
+    fn new(uid: String) -> FollowerKey {
+        FollowerKey {
+            uid,
+            sort_key: uuidgen(),
+        }
+    }
+}
+
+impl From<FollowerKey> for UserKey {
+    fn from(value: FollowerKey) -> Self {
+        let mut key = vec![];
+        key.extend_from_slice(value.uid.as_bytes());
+        key.extend_from_slice(value.sort_key.as_bytes());
+        key.into()
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct UserIndex {
-    keyspace: Keyspace,
     object_repo: ObjectRepo,
     user_index: PartitionHandle,
+    follower_index: PartitionHandle,
 }
 
 impl UserIndex {
@@ -18,18 +41,23 @@ impl UserIndex {
         let object_repo = ObjectRepo::new(keyspace.clone())?;
         let user_index =
             keyspace.open_partition("user_index", PartitionCreateOptions::default())?;
+        let follower_index =
+            keyspace.open_partition("follower_index", PartitionCreateOptions::default())?;
         Ok(UserIndex {
-            keyspace,
             object_repo,
             user_index,
+            follower_index,
         })
     }
-    pub(crate) fn insert(&self, uid: String, user: Actor) -> Result<()> {
-        let mut batch = self.keyspace.batch();
+    pub(crate) fn insert(&self, b: &mut Batch, uid: String, user: Actor) -> Result<()> {
         let obj_key = make_object_key();
-        self.object_repo.batch_insert(&mut batch, obj_key, user)?;
-        batch.insert(&self.user_index, uid, obj_key);
-        batch.commit()?;
+        self.object_repo.insert(b, obj_key, user)?;
+        b.insert(&self.user_index, uid, obj_key);
+        Ok(())
+    }
+    pub(crate) fn insert_follower(&self, b: &mut Batch, uid: String, key: ObjectKey) -> Result<()> {
+        let follower_key = FollowerKey::new(uid);
+        b.insert(&self.follower_index, follower_key, key);
         Ok(())
     }
     pub(crate) fn find_one(&self, uid: String) -> Result<Option<Object>> {
@@ -37,6 +65,14 @@ impl UserIndex {
             return Ok(self.object_repo.find_one(key)?);
         }
         Ok(None)
+    }
+    pub(crate) fn find_followers(&self, uid: String) -> Result<Vec<UserKey>> {
+        let mut result = vec![];
+        for pair in self.follower_index.prefix(uid) {
+            let (_, obj_key) = pair?;
+            result.push(obj_key);
+        }
+        Ok(result)
     }
 }
 
@@ -55,6 +91,7 @@ mod tests {
     fn insert_then_find() -> Result<()> {
         let tmp_dir = tempdir()?;
         let keyspace = Keyspace::open(Config::new(tmp_dir.path()).temporary(true))?;
+        let mut b = keyspace.batch();
         let repo = UserIndex::new(keyspace)?;
         let obj = Object::try_from(json!(
             {
@@ -71,7 +108,8 @@ mod tests {
               }
         ))?;
         let actor = Actor::try_from(obj.clone())?;
-        repo.insert("kenzoishii".to_string(), actor.clone())?;
+        repo.insert(&mut b, "kenzoishii".to_string(), actor.clone())?;
+        b.commit()?;
         assert_eq!(Some(obj), repo.find_one("kenzoishii".to_string())?);
         Ok(())
     }

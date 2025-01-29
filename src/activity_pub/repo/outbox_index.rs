@@ -1,5 +1,5 @@
 use anyhow::Result;
-use fjall::{Keyspace, PartitionCreateOptions, PartitionHandle, UserKey};
+use fjall::{Batch, Keyspace, PartitionCreateOptions, PartitionHandle, UserKey};
 use uuid::Uuid;
 
 use crate::activity_pub::model::{BaseObject, Create, Object};
@@ -32,7 +32,6 @@ impl From<OutboxKey> for UserKey {
 
 #[derive(Clone)]
 pub(crate) struct OutboxIndex {
-    keyspace: Keyspace,
     object_repo: ObjectRepo,
     iri_index: PartitionHandle,
     outbox_index: PartitionHandle,
@@ -45,25 +44,22 @@ impl OutboxIndex {
         let iri_index = keyspace.open_partition("iri_index", options.clone())?;
         let outbox_index = keyspace.open_partition("outbox_index", options)?;
         Ok(OutboxIndex {
-            keyspace,
             object_repo,
             iri_index,
             outbox_index,
         })
     }
-    pub(crate) fn insert_create(&self, uid: String, act: Create) -> Result<()> {
-        let mut batch = self.keyspace.batch();
+    pub(crate) fn insert_create(&self, b: &mut Batch, uid: String, act: Create) -> Result<()> {
         let obj = act.get_object();
         let act_iri = act.id().expect("activity should have IRI");
         let obj_iri = obj.id().expect("object should have IRI");
         let act_id = make_object_key();
         let obj_id = make_object_key();
-        self.object_repo.batch_insert(&mut batch, act_id, act)?;
-        self.object_repo.batch_insert(&mut batch, obj_id, obj)?;
-        batch.insert(&self.iri_index, act_iri, act_id);
-        batch.insert(&self.iri_index, obj_iri, obj_id);
-        batch.insert(&self.outbox_index, OutboxKey::new(uid), act_id);
-        batch.commit()?;
+        self.object_repo.insert(b, act_id, act)?;
+        self.object_repo.insert(b, obj_id, obj)?;
+        b.insert(&self.iri_index, act_iri, act_id);
+        b.insert(&self.iri_index, obj_iri, obj_id);
+        b.insert(&self.outbox_index, OutboxKey::new(uid), act_id);
         Ok(())
     }
     // TODO pagination

@@ -109,9 +109,11 @@ impl State {
         let object = Object::try_from(value)?;
         let user = AsActor::try_from(object)?;
 
+        let mut b = self.keyspace.batch();
         let user_index = UserIndex::new(self.keyspace.clone())?;
-        user_index.insert(uid, user)?;
 
+        user_index.insert(&mut b, uid, user)?;
+        b.commit()?;
         Ok(())
     }
     // TODO effects
@@ -122,9 +124,11 @@ impl State {
         let act_id = format!("pinka-activity:{}", base62_uuid());
         create.as_mut().set_id(&act_id);
 
+        let mut b = self.keyspace.batch();
         let outbox = OutboxIndex::new(self.keyspace.clone())?;
-        outbox.insert_create(uid, create)?;
 
+        outbox.insert_create(&mut b, uid, create)?;
+        b.commit()?;
         Ok(())
     }
 }

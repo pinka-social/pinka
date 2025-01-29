@@ -23,19 +23,14 @@ impl ObjectRepo {
         )?;
         Ok(ObjectRepo { objects })
     }
-    pub(crate) fn insert(&self, uuid: Uuid, object: impl Into<Value>) -> Result<()> {
-        let bytes = object_serde::to_bytes(object)?;
-        self.objects.insert(uuid.as_bytes(), bytes)?;
-        Ok(())
-    }
-    pub(crate) fn batch_insert(
+    pub(crate) fn insert(
         &self,
-        batch: &mut Batch,
+        b: &mut Batch,
         key: ObjectKey,
         object: impl Into<Value>,
     ) -> Result<()> {
         let bytes = object_serde::to_bytes(object)?;
-        batch.insert(&self.objects, key, bytes);
+        b.insert(&self.objects, key, bytes);
         Ok(())
     }
     pub(crate) fn find_one(&self, key: impl AsRef<[u8]>) -> Result<Option<Object>> {
@@ -62,7 +57,7 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    use crate::activity_pub::repo::uuidgen;
+    use crate::activity_pub::repo::make_object_key;
 
     use super::{Object, ObjectRepo};
 
@@ -70,7 +65,7 @@ mod tests {
     fn insert_then_find() -> Result<()> {
         let tmp_dir = tempdir()?;
         let keyspace = Keyspace::open(Config::new(tmp_dir.path()).temporary(true))?;
-        let repo = ObjectRepo::new(keyspace)?;
+        let repo = ObjectRepo::new(keyspace.clone())?;
         let object = Object::try_from(json!({
             "@context": "https://www.w3.org/ns/activitystreams",
             "type": "Note",
@@ -80,9 +75,11 @@ mod tests {
             "cc": ["https://example.com/~erik/followers",
                 "https://www.w3.org/ns/activitystreams#Public"]
         }))?;
-        let uuid = uuidgen();
-        repo.insert(uuid, object.clone())?;
-        assert_eq!(Some(object), repo.find_one(uuid)?);
+        let mut b = keyspace.batch();
+        let obj_key = make_object_key();
+        repo.insert(&mut b, obj_key, object.clone())?;
+        b.commit()?;
+        assert_eq!(Some(object), repo.find_one(obj_key)?);
         Ok(())
     }
 }
