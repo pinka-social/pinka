@@ -8,22 +8,23 @@ use super::json_ld::JsonLdValue;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Create(Value);
 
-impl TryFrom<Object> for Create {
+impl<'a> TryFrom<Object> for Create {
     type Error = Error;
 
-    fn try_from(object: Object) -> Result<Self> {
-        if object.type_is("Create") {
-            if !object.has_props(&["id", "type"]) {
+    fn try_from(mut object: Object) -> Result<Self> {
+        let value = object.as_mut();
+
+        if value.type_is("Create") {
+            if !value.has_props(&["id", "type"]) {
                 bail!("Create activity must have id and type property");
             }
             // TODO validate all required properties
             return Ok(Create(object.into()));
         }
 
-        if !object.has_props(&["type"]) {
+        if !value.has_props(&["type"]) {
             bail!("Object must have type property");
         }
-        let mut value: Value = object.into();
         // TODO: copy @context to activity?
         value.as_object_mut().unwrap().remove("@context");
 
@@ -48,17 +49,27 @@ impl TryFrom<Object> for Create {
                 }
             }
         }
-        map.insert("object".to_string(), value);
+        map.insert("object".to_string(), object.into());
 
         Ok(Create(create))
     }
 }
 
-impl_object_serde_new_type!(Create);
+impl AsRef<Value> for Create {
+    fn as_ref(&self) -> &Value {
+        &self.0
+    }
+}
 
-impl From<Create> for Object {
+impl AsMut<Value> for Create {
+    fn as_mut(&mut self) -> &mut Value {
+        &mut self.0
+    }
+}
+
+impl From<Create> for Value {
     fn from(value: Create) -> Self {
-        Object(value.0)
+        value.0
     }
 }
 
@@ -80,9 +91,10 @@ impl Create {
         obj_map.insert("published".to_string(), Value::String(ts.to_string()));
         self
     }
-    pub(crate) fn to_inner(&self) -> Object {
-        let objv = self.0.get("object").unwrap();
-        Object(objv.clone())
+    pub(crate) fn get_object(&self) -> Object {
+        let map = self.0.as_object().unwrap();
+        let obj = map.get("object").unwrap();
+        Object(obj.clone())
     }
 }
 
@@ -128,9 +140,13 @@ mod tests {
         });
 
         let mut object = Object::try_from(note)?;
-        object.set_id("https://example.com/~mallory/note/72");
+        object
+            .as_mut()
+            .set_id("https://example.com/~mallory/note/72");
         let mut activity = Create::try_from(object)?.with_actor("https://example.net/~mallory");
-        activity.set_id("https://example.net/~mallory/87374");
+        activity
+            .as_mut()
+            .set_id("https://example.net/~mallory/87374");
 
         assert_eq!(result, activity.0);
         Ok(())
