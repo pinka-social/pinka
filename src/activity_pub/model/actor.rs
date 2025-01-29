@@ -3,32 +3,54 @@ use serde_json::{Value, json};
 
 use crate::config::ActivityPubConfig;
 
+use super::Object;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Actor(Value);
 
-impl TryFrom<Value> for Actor {
+impl TryFrom<Object> for Actor {
     type Error = Error;
 
-    fn try_from(value: Value) -> Result<Self> {
+    fn try_from(object: Object) -> Result<Self, Self::Error> {
+        let value = object.as_ref();
         if value.get("id").is_none() {
             bail!("actor should have id property");
         }
         if value.get("name").is_none() {
             bail!("actor should have name property");
         }
-        Ok(Actor(value))
+        Ok(Actor(object.0))
+    }
+}
+
+impl AsRef<Value> for Actor {
+    fn as_ref(&self) -> &Value {
+        &self.0
+    }
+}
+
+impl AsMut<Value> for Actor {
+    fn as_mut(&mut self) -> &mut Value {
+        &mut self.0
+    }
+}
+
+impl From<Actor> for Value {
+    fn from(value: Actor) -> Self {
+        value.0
     }
 }
 
 impl Actor {
-    pub(crate) fn enrich_with(mut self, config: &ActivityPubConfig) -> Actor {
-        let object = self
-            .0
+    // TODO
+    pub(crate) fn enrich_with(mut self, config: &ActivityPubConfig) -> Self {
+        let map = self
+            .as_mut()
             .as_object_mut()
             .expect("Actor must be an JSON object");
 
         let base_url = &config.base_url;
-        let id = object
+        let id = map
             .get("id")
             .expect("Actor must have a local_id")
             .as_str()
@@ -45,26 +67,27 @@ impl Actor {
         }) else {
             unreachable!()
         };
-        object.extend(properties);
+        map.extend(properties);
 
         self
     }
 }
 
-impl_object_serde_new_type!(Actor);
-
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
     use serde_json::json;
+
+    use crate::activity_pub::model::Object;
 
     use super::{ActivityPubConfig, Actor};
 
     #[test]
-    fn enrich_actor() {
+    fn enrich_actor() -> Result<()> {
         let config = ActivityPubConfig {
             base_url: "https://social.example.com".to_string(),
         };
-        let raw_actor = Actor(json!({
+        let object = Object::try_from(json!({
             "id": "john",
             "name": "John Smith",
             "icon": {
@@ -72,11 +95,11 @@ mod tests {
                 "mediaType": "image/jpeg",
                 "url": "https://objects.social.example.com/493d7fea0a23.jpg"
             }
-        }));
-        let actor = raw_actor.enrich_with(&config);
+        }))?;
+        let actor = Actor::try_from(object)?.enrich_with(&config);
         assert_eq!(
-            actor,
-            Actor(json!({
+            actor.as_ref(),
+            &json!({
                 "@context": "https://www.w3.org/ns/activitystreams",
                 "type": "Person",
                 "id": "https://social.example.com/users/john",
@@ -90,7 +113,8 @@ mod tests {
                     "mediaType": "image/jpeg",
                     "url": "https://objects.social.example.com/493d7fea0a23.jpg"
                 }
-            }))
+            })
         );
+        Ok(())
     }
 }

@@ -1,8 +1,14 @@
 use anyhow::Result;
-use fjall::{Keyspace, PartitionCreateOptions, PartitionHandle};
+use fjall::{
+    Batch, Keyspace, KvSeparationOptions, PartitionCreateOptions, PartitionHandle, UserKey,
+};
+use serde_json::Value;
+use uuid::Uuid;
 
 use crate::activity_pub::model::Object;
-use crate::activity_pub::object_serde::ObjectSerDe;
+use crate::activity_pub::object_serde;
+
+use super::ObjectKey;
 
 #[derive(Clone)]
 pub(crate) struct ObjectRepo {
@@ -11,20 +17,41 @@ pub(crate) struct ObjectRepo {
 
 impl ObjectRepo {
     pub(crate) fn new(keyspace: Keyspace) -> Result<ObjectRepo> {
-        let objects = keyspace.open_partition("objects", PartitionCreateOptions::default())?;
+        let objects = keyspace.open_partition(
+            "objects",
+            PartitionCreateOptions::default().with_kv_separation(KvSeparationOptions::default()),
+        )?;
         Ok(ObjectRepo { objects })
     }
-    pub(crate) fn insert(&self, iri: &str, object: Object) -> Result<()> {
-        let bytes = object.into_bytes()?;
-        self.objects.insert(iri, bytes)?;
+    pub(crate) fn insert(&self, uuid: Uuid, object: impl Into<Value>) -> Result<()> {
+        let bytes = object_serde::to_bytes(object)?;
+        self.objects.insert(uuid.as_bytes(), bytes)?;
         Ok(())
     }
-    pub(crate) fn find_one(&self, iri: &str) -> Result<Option<Object>> {
-        if let Some(bytes) = self.objects.get(iri)? {
-            let object = Object::from_bytes(&bytes)?;
+    pub(crate) fn batch_insert(
+        &self,
+        batch: &mut Batch,
+        key: ObjectKey,
+        object: impl Into<Value>,
+    ) -> Result<()> {
+        let bytes = object_serde::to_bytes(object)?;
+        batch.insert(&self.objects, key, bytes);
+        Ok(())
+    }
+    pub(crate) fn find_one(&self, key: impl AsRef<[u8]>) -> Result<Option<Object>> {
+        if let Some(bytes) = self.objects.get(key)? {
+            let object = object_serde::from_bytes(&bytes)?;
             return Ok(Some(object));
         }
         Ok(None)
+    }
+    pub(crate) fn all(&self) -> Result<Vec<Object>> {
+        let mut result = vec![];
+        for bytes in self.objects.values() {
+            let object = object_serde::from_bytes(&bytes?)?;
+            result.push(object);
+        }
+        Ok(result)
     }
 }
 
@@ -34,6 +61,8 @@ mod tests {
     use fjall::{Config, Keyspace};
     use serde_json::json;
     use tempfile::tempdir;
+
+    use crate::activity_pub::repo::uuidgen;
 
     use super::{Object, ObjectRepo};
 
@@ -51,9 +80,9 @@ mod tests {
             "cc": ["https://example.com/~erik/followers",
                 "https://www.w3.org/ns/activitystreams#Public"]
         }))?;
-        let iri = "https://example.com/~mallory/note/72";
-        repo.insert(iri, object.clone())?;
-        assert_eq!(Some(object), repo.find_one(iri)?);
+        let uuid = uuidgen();
+        repo.insert(uuid, object.clone())?;
+        assert_eq!(Some(object), repo.find_one(uuid)?);
         Ok(())
     }
 }

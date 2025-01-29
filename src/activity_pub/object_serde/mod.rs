@@ -7,60 +7,21 @@ use serde_json::{Number, Value};
 
 use self::symbols::activitystreams_symbol_table;
 
+use super::model::Object;
+
 #[derive(Debug, Encode, Decode)]
 enum Envelope {
     #[n(0)]
     V1(#[n(0)] NodeValue),
 }
 
-pub(crate) trait ObjectSerDe {
-    fn into_bytes(self) -> Result<Vec<u8>>
-    where
-        Self: Into<NodeValue>,
-    {
-        Ok(minicbor::to_vec(&Envelope::V1(self.into())).context("unable to serialize payload")?)
-    }
-
-    fn from_bytes(bytes: &[u8]) -> Result<Self>
-    where
-        Self: From<NodeValue>,
-    {
-        let Envelope::V1(value) =
-            minicbor::decode(bytes).context("unable to deserialize payload")?;
-        Ok(Self::from(value))
-    }
+pub(crate) fn to_bytes(object: impl Into<Value>) -> Result<Vec<u8>> {
+    let value = object.into();
+    Ok(minicbor::to_vec(&Envelope::V1(value.into())).context("unable to serialize payload")?)
 }
-
-macro_rules! impl_object_serde_new_type {
-    ($ty:ident) => {
-        impl crate::activity_pub::object_serde::ObjectSerDe for $ty {}
-        impl From<$ty> for crate::activity_pub::object_serde::NodeValue {
-            fn from(value: $ty) -> Self {
-                value.0.into()
-            }
-        }
-        impl From<crate::activity_pub::object_serde::NodeValue> for $ty {
-            fn from(value: crate::activity_pub::object_serde::NodeValue) -> Self {
-                $ty(value.into())
-            }
-        }
-        impl From<$ty> for serde_json::Value {
-            fn from(value: $ty) -> Self {
-                value.0
-            }
-        }
-        impl std::ops::Deref for $ty {
-            type Target = serde_json::Value;
-            fn deref(&self) -> &Self::Target {
-                &self.0
-            }
-        }
-        impl std::ops::DerefMut for $ty {
-            fn deref_mut(&mut self) -> &mut Self::Target {
-                &mut self.0
-            }
-        }
-    };
+pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Object> {
+    let Envelope::V1(value) = minicbor::decode(bytes).context("unable to deserialize payload")?;
+    Object::try_from(Value::from(value))
 }
 
 #[derive(Debug)]

@@ -2,15 +2,17 @@ use anyhow::{Context, Result};
 use fjall::Keyspace;
 use minicbor::{Decode, Encode};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
+use serde_json::Value;
 use tracing::info;
 
 use crate::worker::raft::{
     ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg, get_raft_applied,
 };
 
-use super::model::{Create, JsonLdValue};
+use super::UserIndex;
+use super::model::{Actor as AsActor, Create, JsonLdValue, Object};
 use super::object_serde::NodeValue;
-use super::repo::{ActivityRepo, ObjectRepo, base62_uuid};
+use super::repo::{OutboxIndex, base62_uuid};
 
 pub(crate) struct ActivityPubMachine;
 
@@ -64,9 +66,11 @@ impl Actor for ActivityPubMachine {
 
 #[derive(Debug, Encode, Decode)]
 pub(crate) enum ActivityPubCommand {
-    /// Client to Server - Create Activity
     #[n(0)]
-    Create(#[n(0)] NodeValue),
+    UpdateUser(#[n(0)] String, #[n(1)] NodeValue),
+    /// Client to Server - Create Activity
+    #[n(1)]
+    Create(#[n(0)] String, #[n(1)] NodeValue),
 }
 
 impl ActivityPubCommand {
@@ -90,24 +94,37 @@ impl State {
         info!(target: "apub", ?command, "received command");
 
         match command {
-            ActivityPubCommand::Create(node_value) => self.handle_create(node_value).await?,
+            ActivityPubCommand::UpdateUser(uid, node_value) => {
+                self.handle_new_user(uid, node_value).await?;
+            }
+            ActivityPubCommand::Create(uid, node_value) => {
+                self.handle_create(uid, node_value).await?;
+            }
         }
 
         Ok(ClientResult::ok())
     }
+    async fn handle_new_user(&mut self, uid: String, node_value: NodeValue) -> Result<()> {
+        let value = Value::from(node_value);
+        let object = Object::try_from(value)?;
+        let user = AsActor::try_from(object)?;
 
-    async fn handle_create(&mut self, node_value: NodeValue) -> Result<()> {
-        let mut create = Create::try_from(node_value)?.with_actor("https://example.com/users/john");
+        let user_index = UserIndex::new(self.keyspace.clone())?;
+        user_index.insert(uid, user)?;
+
+        Ok(())
+    }
+    // TODO effects
+    async fn handle_create(&mut self, uid: String, node_value: NodeValue) -> Result<()> {
+        let value = Value::from(node_value);
+        let object = Object::try_from(value)?;
+        let mut create = Create::try_from(object)?.with_actor("https://example.com/users/john");
         let act_id = format!("pinka-activity:{}", base62_uuid());
-        create.set_id(&act_id);
+        create.as_mut().set_id(&act_id);
 
-        let object = create.to_inner();
-        let iri = object.id().expect("object should have id");
-        let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
-        obj_repo.insert(&iri, object)?;
+        let outbox = OutboxIndex::new(self.keyspace.clone())?;
+        outbox.insert_create(uid, create)?;
 
-        let act_repo = ActivityRepo::new(self.keyspace.clone())?;
-        act_repo.insert(&act_id, create.into())?;
         Ok(())
     }
 }
