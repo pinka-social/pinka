@@ -10,7 +10,7 @@ use tokio::net::TcpListener;
 use tracing::info;
 
 use crate::activity_pub::machine::ActivityPubCommand;
-use crate::activity_pub::model::{Actor, JsonLdValue};
+use crate::activity_pub::model::{Actor, BaseObject, JsonLdValue};
 use crate::activity_pub::{ObjectRepo, OutboxIndex, UserIndex};
 use crate::config::RuntimeConfig;
 use crate::worker::raft::{LogEntryValue, RaftClientMsg, get_raft_local_client};
@@ -23,6 +23,8 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
     let app = Router::new()
         .route("/users/{id}", get(get_actor).post(post_actor))
         .route("/users/{id}/outbox", get(get_outbox).post(post_outbox))
+        // .route("/users/{id}/inbox", post(post_inbox))
+        .route("/users/{id}/followers", get(get_followers))
         .with_state(config.clone());
     let listener = TcpListener::bind(format!("0.0.0.0:{}", config.server.http.port)).await?;
     axum::serve(listener, app).await?;
@@ -62,8 +64,8 @@ async fn get_outbox(
     State(config): State<RuntimeConfig>,
     Path(uid): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
-    let repo = OutboxIndex::new(config.keyspace.clone()).map_err(ise)?;
-    let acts = repo
+    let index = OutboxIndex::new(config.keyspace.clone()).map_err(ise)?;
+    let acts = index
         .all(uid)
         .map_err(ise)?
         .into_iter()
@@ -88,6 +90,23 @@ async fn post_outbox(Path(uid): Path<String>, Json(value): Json<Value>) -> Resul
         return Ok(());
     }
     Err(StatusCode::BAD_REQUEST)
+}
+
+async fn get_followers(
+    State(config): State<RuntimeConfig>,
+    Path(uid): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    let index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
+    let repo = ObjectRepo::new(config.keyspace.clone()).map_err(ise)?;
+    let followers = index.find_followers(uid).map_err(ise)?;
+    let mut result = vec![];
+    for key in followers {
+        if let Some(obj) = repo.find_one(key).map_err(ise)? {
+            let id = obj.id().context("object should have id").map_err(ise)?;
+            result.push(Value::String(id));
+        }
+    }
+    Ok(Json(Value::Array(result)))
 }
 
 fn ise(_error: anyhow::Error) -> StatusCode {
