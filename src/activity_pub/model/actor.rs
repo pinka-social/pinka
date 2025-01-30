@@ -60,7 +60,6 @@ impl Actor {
             "@context": "https://www.w3.org/ns/activitystreams",
             "type": "Person",
             "id": format!("{}/users/{}", base_url, id),
-            "following": format!("{}/users/{}/following", base_url, id),
             "followers": format!("{}/users/{}/followers", base_url, id),
             "inbox": format!("{}/users/{}/inbox", base_url, id),
             "outbox": format!("{}/users/{}/outbox", base_url, id),
