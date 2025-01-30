@@ -52,3 +52,4 @@ Optionally index by actor id?
 * <https://github.com/madsim-rs/madsim>
 * <https://github.com/rabbitmq/ra/blob/main/docs/internals/INTERNALS.md>
 * <https://eli.thegreenplace.net/2020/implementing-raft-part-2-commands-and-log-replication/>
+* <https://www.w3.org/wiki/ActivityPub/Primer>

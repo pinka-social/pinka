@@ -4,6 +4,8 @@ use serde_json::Value;
 pub(crate) trait JsonLdValue {
     /// JSON-LD type is
     fn type_is(&self, ld_type: &str) -> bool;
+    /// JSON-LD type is
+    fn obj_type(&self) -> Option<&str>;
     /// Check required properties
     fn has_props(&self, props: &[&str]) -> bool;
     /// The value is either a string, or array of strings
@@ -12,6 +14,9 @@ pub(crate) trait JsonLdValue {
     fn is_object_array(&self) -> bool;
     /// The value is a ActivityStreams Activity
     fn is_activity(&self) -> bool;
+    /// The value is a ActivityStreams Activity supported by our inbox
+    fn is_inbox_activity(&self) -> bool;
+    fn object_iri(&self) -> Option<&str>;
     fn id(&self) -> Option<&str>;
     /// Update the id property
     fn set_id(&mut self, id_iri: &str);
@@ -24,6 +29,9 @@ impl JsonLdValue for Value {
             return typ == ld_type;
         }
         false
+    }
+    fn obj_type(&self) -> Option<&str> {
+        self.get("type").and_then(|t| t.as_str())
     }
     fn has_props(&self, props: &[&str]) -> bool {
         if let Some(map) = self.as_object() {
@@ -87,6 +95,33 @@ impl JsonLdValue for Value {
             }
         }
         false
+    }
+    fn is_inbox_activity(&self) -> bool {
+        if let Some(Value::String(typ)) = self.get("type") {
+            if [
+                "Announce", "Create", "Delete", "Dislike", "Follow", "Like", "Update", "Undo",
+            ]
+            .contains(&typ.as_str())
+            {
+                return true;
+            }
+        }
+        false
+    }
+    fn object_iri(&self) -> Option<&str> {
+        if let Some(v) = self.get("object") {
+            if v.is_string() {
+                return v.as_str();
+            }
+            if v.is_string_array() {
+                let id = v.as_array().unwrap().get(0).unwrap();
+                return id.as_str();
+            }
+            if v.is_object() {
+                return v.id();
+            }
+        }
+        None
     }
     fn id(&self) -> Option<&str> {
         self.get("id").and_then(Value::as_str)

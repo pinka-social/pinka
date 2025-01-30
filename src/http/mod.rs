@@ -3,7 +3,7 @@ mod iri;
 use anyhow::{Context, Result};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::Value;
 use tokio::net::TcpListener;
@@ -23,7 +23,7 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
     let app = Router::new()
         .route("/users/{id}", get(get_actor).post(post_actor))
         .route("/users/{id}/outbox", get(get_outbox).post(post_outbox))
-        // .route("/users/{id}/inbox", post(post_inbox))
+        .route("/users/{id}/inbox", post(post_inbox))
         .route("/users/{id}/followers", get(get_followers))
         .with_state(config.clone());
     let listener = TcpListener::bind(format!("0.0.0.0:{}", config.server.http.port)).await?;
@@ -76,10 +76,8 @@ async fn get_outbox(
 
 async fn post_outbox(Path(uid): Path<String>, Json(value): Json<Value>) -> Result<(), StatusCode> {
     if value.type_is("Create") || !value.is_activity() {
-        // Send request to state machine. We must first persist the object, then
-        // persist the activity, then update indexes.
         let client = get_raft_local_client().map_err(ise)?;
-        let command = ActivityPubCommand::Create(uid, value.into());
+        let command = ActivityPubCommand::C2sCreate(uid, value.into());
         ractor::call!(
             client,
             RaftClientMsg::ClientRequest,
@@ -90,6 +88,32 @@ async fn post_outbox(Path(uid): Path<String>, Json(value): Json<Value>) -> Resul
         return Ok(());
     }
     Err(StatusCode::BAD_REQUEST)
+}
+
+async fn post_inbox(Path(uid): Path<String>, Json(value): Json<Value>) -> Result<(), StatusCode> {
+    if value.is_inbox_activity() {
+        let client = get_raft_local_client().map_err(ise)?;
+        let command = match value.obj_type() {
+            Some("Create") => ActivityPubCommand::S2sCreate(uid, value.into()),
+            Some("Delete") => ActivityPubCommand::S2sDelete(uid, value.into()),
+            Some("Like") => ActivityPubCommand::S2sLike(uid, value.into()),
+            Some("Dislike") => ActivityPubCommand::S2sDislike(uid, value.into()),
+            Some("Follow") => ActivityPubCommand::S2sFollow(uid, value.into()),
+            Some("Undo") => ActivityPubCommand::S2sUndo(uid, value.into()),
+            Some("Update") => ActivityPubCommand::S2sUpdate(uid, value.into()),
+            Some("Announce") => ActivityPubCommand::S2sAnnounce(uid, value.into()),
+            _ => return Ok(()),
+        };
+        ractor::call!(
+            client,
+            RaftClientMsg::ClientRequest,
+            LogEntryValue::from(command)
+        )
+        .context("RPC call failed")
+        .map_err(ise)?;
+        return Ok(());
+    }
+    return Ok(());
 }
 
 async fn get_followers(
