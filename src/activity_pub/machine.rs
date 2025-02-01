@@ -1,12 +1,13 @@
 use anyhow::{Context, Result};
-use fjall::Keyspace;
+use fjall::{Keyspace, PersistMode};
 use minicbor::{Decode, Encode};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use serde_json::Value;
+use tokio::task::block_in_place;
 use tracing::info;
 
 use crate::worker::raft::{
-    ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg, get_raft_applied,
+    get_raft_applied, ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg,
 };
 
 use super::model::{Actor as AsActor, Create, JsonLdValue, Object};
@@ -171,11 +172,14 @@ impl State {
         let object = Object::try_from(value)?;
         let user = AsActor::try_from(object)?;
 
-        let mut b = self.keyspace.batch();
-        let user_index = UserIndex::new(self.keyspace.clone())?;
-
-        user_index.insert(&mut b, &uid, user)?;
-        b.commit()?;
+        block_in_place(|| -> Result<()> {
+            let mut b = self.keyspace.batch();
+            let user_index = UserIndex::new(self.keyspace.clone())?;
+            user_index.insert(&mut b, &uid, user)?;
+            b.commit()?;
+            self.keyspace.persist(PersistMode::SyncAll)?;
+            Ok(())
+        })?;
         Ok(())
     }
     // TODO effects
@@ -188,15 +192,17 @@ impl State {
         } = cmd;
         let value = Value::from(node);
         let object = Object::try_from(value)?;
-        let mut create = Create::try_from(object)?.with_actor("https://example.com/users/john");
-        let act_id = format!("pinka-activity:{}", act_key);
-        create.as_mut().set_id(&act_id);
+        let create = Create::try_from(object)?;
 
-        let mut b = self.keyspace.batch();
-        let outbox = OutboxIndex::new(self.keyspace.clone())?;
+        block_in_place(|| -> Result<()> {
+            let mut b = self.keyspace.batch();
+            let outbox = OutboxIndex::new(self.keyspace.clone())?;
+            outbox.insert_create(&mut b, uid, act_key, obj_key, create)?;
+            b.commit()?;
+            self.keyspace.persist(PersistMode::SyncAll)?;
+            Ok(())
+        })?;
 
-        outbox.insert_create(&mut b, uid, act_key, obj_key, create)?;
-        b.commit()?;
         Ok(())
     }
     async fn handle_s2s_create(&mut self, cmd: S2sCommand) -> Result<()> {
@@ -212,13 +218,16 @@ impl State {
             let object = Object::try_from(value)?;
             // TODO let create = Create::try_from(object)?;
 
-            let mut b = self.keyspace.batch();
-            let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
-            let ctx_index = ContextIndex::new(self.keyspace.clone())?;
-            obj_repo.insert(&mut b, obj_key, object)?;
-            ctx_index.insert(&mut b, iri, obj_key)?;
-
-            b.commit()?;
+            block_in_place(|| -> Result<()> {
+                let mut b = self.keyspace.batch();
+                let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
+                let ctx_index = ContextIndex::new(self.keyspace.clone())?;
+                obj_repo.insert(&mut b, obj_key, object)?;
+                ctx_index.insert(&mut b, iri, obj_key)?;
+                b.commit()?;
+                self.keyspace.persist(PersistMode::SyncAll)?;
+                Ok(())
+            })?;
         }
         Ok(())
     }
@@ -236,13 +245,16 @@ impl State {
             };
             let iri = iri.to_string();
 
-            let mut b = self.keyspace.batch();
-            let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
-            let ctx_index = ContextIndex::new(self.keyspace.clone())?;
-            obj_repo.insert(&mut b, obj_key, value)?;
-            ctx_index.insert_likes(&mut b, iri, obj_key)?;
-
-            b.commit()?;
+            block_in_place(|| -> Result<()> {
+                let mut b = self.keyspace.batch();
+                let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
+                let ctx_index = ContextIndex::new(self.keyspace.clone())?;
+                obj_repo.insert(&mut b, obj_key, value)?;
+                ctx_index.insert_likes(&mut b, iri, obj_key)?;
+                b.commit()?;
+                self.keyspace.persist(PersistMode::SyncAll)?;
+                Ok(())
+            })?;
         }
         Ok(())
     }
@@ -255,13 +267,16 @@ impl State {
         let S2sCommand { uid, obj_key, node } = cmd;
         let value = Value::from(node);
         if value.has_props(&["object"]) {
-            let mut b = self.keyspace.batch();
-            let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
-            let user_index = UserIndex::new(self.keyspace.clone())?;
-            obj_repo.insert(&mut b, obj_key, value)?;
-            user_index.insert_follower(&mut b, &uid, obj_key)?;
-
-            b.commit()?;
+            block_in_place(|| -> Result<()> {
+                let mut b = self.keyspace.batch();
+                let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
+                let user_index = UserIndex::new(self.keyspace.clone())?;
+                obj_repo.insert(&mut b, obj_key, value)?;
+                user_index.insert_follower(&mut b, &uid, obj_key)?;
+                b.commit()?;
+                self.keyspace.persist(PersistMode::SyncAll)?;
+                Ok(())
+            })?;
             // TODO send Accept or Reject back
         }
         Ok(())
@@ -303,13 +318,16 @@ impl State {
             };
             let iri = iri.to_string();
 
-            let mut b = self.keyspace.batch();
-            let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
-            let ctx_index = ContextIndex::new(self.keyspace.clone())?;
-            obj_repo.insert(&mut b, obj_key, value)?;
-            ctx_index.insert_shares(&mut b, iri, obj_key)?;
-
-            b.commit()?;
+            block_in_place(|| -> Result<()> {
+                let mut b = self.keyspace.batch();
+                let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
+                let ctx_index = ContextIndex::new(self.keyspace.clone())?;
+                obj_repo.insert(&mut b, obj_key, value)?;
+                ctx_index.insert_shares(&mut b, iri, obj_key)?;
+                b.commit()?;
+                self.keyspace.persist(PersistMode::SyncAll)?;
+                Ok(())
+            })?;
         }
         Ok(())
     }

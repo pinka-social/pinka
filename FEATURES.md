@@ -34,8 +34,8 @@
     - [ ] Follow / unfollow
     - [ ] Moderation
     - [ ] Spam detection
-- [ ] ActivityPub endpoints
-    - [ ] Client to Server Interactions
-        - [ ] Create Activity
+- [x] ActivityPub endpoints
+    - [x] Client to Server Interactions
+        - [x] Create Activity
 - [ ] RESTful endpoints for webui
 - [ ] Webmention

@@ -1,4 +1,5 @@
 mod context_index;
+mod iri_index;
 mod object_repo;
 mod outbox_index;
 mod user_index;

@@ -1,6 +1,6 @@
 //! Storage friendly presentation of Activity Streams' core data model.
 
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +32,16 @@ impl AsMut<Value> for Object {
 impl From<Object> for Value {
     fn from(value: Object) -> Self {
         value.0
+    }
+}
+
+impl Object {
+    pub(crate) fn ensure_id(mut self, iri: String) -> Object {
+        let obj_map = self.0.as_object_mut().unwrap();
+        if !obj_map.contains_key("id") {
+            obj_map.insert("id".to_string(), Value::String(iri));
+        }
+        self
     }
 }
 

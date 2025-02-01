@@ -1,9 +1,9 @@
-use anyhow::{Error, Result, bail};
+use anyhow::{bail, Error, Result};
 use jiff::Timestamp;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
-use super::Object;
 use super::json_ld::JsonLdValue;
+use super::Object;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Create(Value);
@@ -15,7 +15,7 @@ impl<'a> TryFrom<Object> for Create {
         let value = object.as_mut();
 
         if value.type_is("Create") {
-            if !value.has_props(&["id", "type"]) {
+            if !value.has_props(&["id"]) {
                 bail!("Create activity must have id and type property");
             }
             // TODO validate all required properties
@@ -74,21 +74,16 @@ impl From<Create> for Value {
 }
 
 impl Create {
-    pub(crate) fn with_actor(mut self, actor_iri: &str) -> Self {
+    pub(crate) fn with_id(mut self, iri: String) -> Self {
+        let map = self.0.as_object_mut().unwrap();
+        map.insert("id".to_string(), Value::String(iri));
+        self
+    }
+    pub(crate) fn with_actor(mut self, actor_iri: String) -> Self {
         let map = self.0.as_object_mut().unwrap();
         map.insert("actor".to_string(), Value::String(actor_iri.to_string()));
         let obj_map = map.get_mut("object").unwrap().as_object_mut().unwrap();
-        obj_map.insert(
-            "attributedTo".to_string(),
-            Value::String(actor_iri.to_string()),
-        );
-        self
-    }
-    pub(crate) fn with_published(mut self, ts: Timestamp) -> Self {
-        let map = self.0.as_object_mut().unwrap();
-        map.insert("published".to_string(), Value::String(ts.to_string()));
-        let obj_map = map.get_mut("object").unwrap().as_object_mut().unwrap();
-        obj_map.insert("published".to_string(), Value::String(ts.to_string()));
+        obj_map.insert("attributedTo".to_string(), Value::String(actor_iri));
         self
     }
     pub(crate) fn get_object(&self) -> Object {
@@ -143,7 +138,8 @@ mod tests {
         object
             .as_mut()
             .set_id("https://example.com/~mallory/note/72");
-        let mut activity = Create::try_from(object)?.with_actor("https://example.net/~mallory");
+        let mut activity =
+            Create::try_from(object)?.with_actor("https://example.net/~mallory".to_string());
         activity
             .as_mut()
             .set_id("https://example.net/~mallory/87374");
