@@ -117,6 +117,16 @@ async fn get_outbox(
                 "{}/users/{uid}/outbox?{query}",
                 config.init.activity_pub.base_url,
             ))
+            .first(format!(
+                "{}/users/{uid}/outbox?after={}",
+                config.init.activity_pub.base_url,
+                Uuid::nil().simple()
+            ))
+            .last(format!(
+                "{}/users/{uid}/outbox?before={}",
+                config.init.activity_pub.base_url,
+                Uuid::max().simple()
+            ))
             .with_ordered_items(items)
             .ordered();
         if let Some(id) = prev {
@@ -142,6 +152,11 @@ async fn get_outbox(
                 "{}/users/{uid}/outbox?after={}",
                 config.init.activity_pub.base_url,
                 Uuid::nil().simple()
+            ))
+            .last(format!(
+                "{}/users/{uid}/outbox?before={}",
+                config.init.activity_pub.base_url,
+                Uuid::max().simple()
             ))
             .total_items(index.count(&uid))
             .ordered();
@@ -229,6 +244,16 @@ async fn get_followers(
                 "{}/users/{uid}/outbox?{query}",
                 config.init.activity_pub.base_url,
             ))
+            .first(format!(
+                "{}/users/{uid}/followers?after={}",
+                config.init.activity_pub.base_url,
+                Uuid::nil().simple()
+            ))
+            .last(format!(
+                "{}/users/{uid}/followers?after={}",
+                config.init.activity_pub.base_url,
+                Uuid::max().simple()
+            ))
             .with_ordered_items(items)
             .ordered();
         if let Some(id) = prev {
@@ -254,6 +279,11 @@ async fn get_followers(
                 "{}/users/{uid}/followers?after={}",
                 config.init.activity_pub.base_url,
                 Uuid::nil().simple()
+            ))
+            .last(format!(
+                "{}/users/{uid}/followers?after={}",
+                config.init.activity_pub.base_url,
+                Uuid::max().simple()
             ))
             .total_items(index.count_followers(&uid))
             .ordered();
