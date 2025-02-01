@@ -9,7 +9,6 @@ default-run = "pinka"
 [dependencies]
 anyhow = "1.0"
 axum = "0.8.1"
-base62 = "2.2.1"
 bimap = "0.6.3"
 fd-lock = "4.0.2"
 fjall = "2.4"

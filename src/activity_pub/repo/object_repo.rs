@@ -1,9 +1,6 @@
 use anyhow::Result;
-use fjall::{
-    Batch, Keyspace, KvSeparationOptions, PartitionCreateOptions, PartitionHandle, UserKey,
-};
+use fjall::{Batch, Keyspace, KvSeparationOptions, PartitionCreateOptions, PartitionHandle};
 use serde_json::Value;
-use uuid::Uuid;
 
 use crate::activity_pub::model::Object;
 use crate::activity_pub::object_serde;
@@ -57,9 +54,7 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    use crate::activity_pub::repo::make_object_key;
-
-    use super::{Object, ObjectRepo};
+    use super::{Object, ObjectKey, ObjectRepo};
 
     #[test]
     fn insert_then_find() -> Result<()> {
@@ -76,7 +71,7 @@ mod tests {
                 "https://www.w3.org/ns/activitystreams#Public"]
         }))?;
         let mut b = keyspace.batch();
-        let obj_key = make_object_key();
+        let obj_key = ObjectKey::new();
         repo.insert(&mut b, obj_key, object.clone())?;
         b.commit()?;
         assert_eq!(Some(object), repo.find_one(obj_key)?);
