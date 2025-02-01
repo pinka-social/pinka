@@ -1,8 +1,4 @@
-use core::panic;
-
 use serde_json::{Number, Value, json};
-
-use super::Object;
 
 pub(crate) struct Collection(Value);
 
@@ -13,7 +9,17 @@ impl Collection {
             "type": "Collection"
         }))
     }
-    pub(crate) fn with_items(mut self, items: Vec<Object>) -> Collection {
+    pub(crate) fn id(mut self, link: impl Into<String>) -> Collection {
+        self.0
+            .as_object_mut()
+            .unwrap()
+            .insert("id".to_string(), Value::String(link.into()));
+        self
+    }
+    pub(crate) fn with_items<T>(mut self, items: Vec<T>) -> Collection
+    where
+        T: Into<Value>,
+    {
         let items = items.into_iter().map(|it| it.into()).collect();
         self.0
             .as_object_mut()
@@ -21,7 +27,10 @@ impl Collection {
             .insert("items".to_string(), Value::Array(items));
         self
     }
-    pub(crate) fn with_ordered_items(mut self, items: Vec<Object>) -> Collection {
+    pub(crate) fn with_ordered_items<T>(mut self, items: Vec<T>) -> Collection
+    where
+        T: Into<Value>,
+    {
         let items = items.into_iter().map(|it| it.into()).collect();
         self.0
             .as_object_mut()
@@ -36,32 +45,32 @@ impl Collection {
             .insert("totalItems".to_string(), Value::Number(Number::from(total)));
         self
     }
-    pub(crate) fn first(mut self, link: &str) -> Collection {
+    pub(crate) fn first(mut self, link: impl Into<String>) -> Collection {
         self.0
             .as_object_mut()
             .unwrap()
-            .insert("first".to_string(), Value::String(link.to_string()));
+            .insert("first".to_string(), Value::String(link.into()));
         self
     }
-    pub(crate) fn last(mut self, link: &str) -> Collection {
+    pub(crate) fn last(mut self, link: impl Into<String>) -> Collection {
         self.0
             .as_object_mut()
             .unwrap()
-            .insert("last".to_string(), Value::String(link.to_string()));
+            .insert("last".to_string(), Value::String(link.into()));
         self
     }
-    pub(crate) fn next(mut self, link: &str) -> Collection {
+    pub(crate) fn next(mut self, link: impl Into<String>) -> Collection {
         self.0
             .as_object_mut()
             .unwrap()
-            .insert("next".to_string(), Value::String(link.to_string()));
+            .insert("next".to_string(), Value::String(link.into()));
         self
     }
-    pub(crate) fn prev(mut self, link: &str) -> Collection {
+    pub(crate) fn prev(mut self, link: impl Into<String>) -> Collection {
         self.0
             .as_object_mut()
             .unwrap()
-            .insert("prev".to_string(), Value::String(link.to_string()));
+            .insert("prev".to_string(), Value::String(link.into()));
         self
     }
     pub(crate) fn ordered(mut self) -> Collection {

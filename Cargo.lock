@@ -133,15 +133,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "base62"
-version = "2.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10e52a7bcb1d6beebee21fb5053af9e3cbb7a7ed1a4909e534040e676437ab1f"
-dependencies = [
- "rustversion",
-]
-
-[[package]]
 name = "bimap"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1116,7 +1107,6 @@ version = "0.1.0-alpha.0"
 dependencies = [
  "anyhow",
  "axum",
- "base62",
  "bimap",
  "fd-lock",
  "fjall",
