@@ -62,10 +62,20 @@ impl OutboxIndex {
         b.insert(&self.outbox_index, OutboxKey::new(uid), act_id);
         Ok(())
     }
+    pub(crate) fn count(&self, uid: String) -> u64 {
+        // FIXME optimize scanning
+        self.outbox_index.prefix(uid).count() as u64
+    }
     // TODO pagination
-    pub(crate) fn all(&self, uid: String) -> Result<Vec<Object>> {
+    pub(crate) fn find_all(&self, uid: String, after: String, first: u64) -> Result<Vec<Object>> {
         let mut keys = vec![];
-        for pair in self.outbox_index.prefix(uid) {
+        let uuid: Uuid = after.parse()?;
+        let start: UserKey = OutboxKey {
+            uid,
+            sort_key: uuid,
+        }
+        .into();
+        for pair in self.outbox_index.range(start..).take(first.try_into()?) {
             let (_, object_key) = pair?;
             keys.push(object_key);
         }

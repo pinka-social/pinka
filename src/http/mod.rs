@@ -1,19 +1,26 @@
 mod iri;
 
 use anyhow::{Context, Result};
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use serde::Deserialize;
 use serde_json::Value;
 use tokio::net::TcpListener;
 use tracing::info;
 
 use crate::activity_pub::machine::ActivityPubCommand;
-use crate::activity_pub::model::{Actor, BaseObject, JsonLdValue};
+use crate::activity_pub::model::{Actor, BaseObject, Collection, JsonLdValue, Object};
 use crate::activity_pub::{ObjectRepo, OutboxIndex, UserIndex};
 use crate::config::RuntimeConfig;
 use crate::worker::raft::{LogEntryValue, RaftClientMsg, get_raft_local_client};
+
+#[derive(Debug, Deserialize)]
+struct PageParams {
+    after: Option<String>,
+    first: Option<u64>,
+}
 
 pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
     if !config.server.http.listen {
@@ -63,15 +70,30 @@ async fn post_actor(Path(uid): Path<String>, Json(value): Json<Value>) -> Result
 async fn get_outbox(
     State(config): State<RuntimeConfig>,
     Path(uid): Path<String>,
+    Query(params): Query<PageParams>,
 ) -> Result<Json<Value>, StatusCode> {
     let index = OutboxIndex::new(config.keyspace.clone()).map_err(ise)?;
-    let acts = index
-        .all(uid)
-        .map_err(ise)?
-        .into_iter()
-        .map(|obj| obj.into())
-        .collect();
-    Ok(Json(Value::Array(acts)))
+    if let Some(after) = params.after {
+        let first = params.first.unwrap_or(10).clamp(0, 50);
+        let mut items: Vec<Object> = index.find_all(uid, after, first + 1).map_err(invalid)?;
+        let next = if items.len() == first as usize + 1 {
+            Some(items.remove(first as usize))
+        } else {
+            None
+        };
+        let mut outbox = Collection::new().with_ordered_items(items).ordered();
+        if let Some(next) = next {
+            let id = next.id().expect("activity in outbox should have id");
+            outbox = outbox.next(&id);
+        }
+        Ok(Json(outbox.to_page().into()))
+    } else {
+        let outbox = Collection::new()
+            .first("TODO")
+            .total_items(index.count(uid))
+            .ordered();
+        Ok(Json(outbox.into()))
+    }
 }
 
 async fn post_outbox(Path(uid): Path<String>, Json(value): Json<Value>) -> Result<(), StatusCode> {
