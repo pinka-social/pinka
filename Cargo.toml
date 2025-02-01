@@ -3,7 +3,7 @@ name = "pinka"
 description = "A highly available, ActivityPub-powered commenting system that bridges the gap between web comments and the Fediverse. Perfect for blogs looking to engage with Mastodon and other ActivityPub-compatible platforms."
 license = "MIT OR Apache-2.0"
 version = "0.1.0-alpha.0"
-edition = "2024"
+edition = "2021"
 default-run = "pinka"
 
 [dependencies]
