@@ -4,6 +4,7 @@ use minicbor::{Decode, Encode};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use tokio::task::block_in_place;
 use tracing::{info, warn};
+use uuid::Bytes;
 
 use crate::worker::raft::{
     get_raft_applied, ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg,
@@ -11,6 +12,7 @@ use crate::worker::raft::{
 
 use super::model::{Actor as AsActor, Create, Object};
 use super::repo::{ContextIndex, OutboxIndex};
+use super::simple_queue::SimpleQueue;
 use super::{IriIndex, ObjectKey, ObjectRepo, UserIndex};
 
 pub(crate) struct ActivityPubMachine;
@@ -22,6 +24,7 @@ pub(crate) struct State {
     ctx_index: ContextIndex,
     iri_index: IriIndex,
     obj_repo: ObjectRepo,
+    queue: SimpleQueue,
 }
 
 pub(crate) struct ActivityPubMachineInit {
@@ -45,6 +48,7 @@ impl Actor for ActivityPubMachine {
             let ctx_index = ContextIndex::new(keyspace.clone())?;
             let iri_index = IriIndex::new(keyspace.clone())?;
             let obj_repo = ObjectRepo::new(keyspace.clone())?;
+            let queue = SimpleQueue::new(keyspace.clone())?;
             Ok(State {
                 keyspace,
                 user_index,
@@ -52,6 +56,7 @@ impl Actor for ActivityPubMachine {
                 ctx_index,
                 iri_index,
                 obj_repo,
+                queue,
             })
         })
     }
@@ -105,6 +110,12 @@ pub(crate) enum ActivityPubCommand {
     S2sUpdate(#[n(0)] S2sCommand),
     #[n(9)]
     S2sAnnounce(#[n(0)] S2sCommand),
+    #[n(10)]
+    QueueDelivery(#[n(0)] ObjectKey),
+    #[n(11)]
+    ReceiveDelivery(#[n(0)] u64),
+    #[n(12)]
+    AckDelivery(#[n(0)] Bytes, #[n(1)] Bytes),
 }
 
 #[derive(Debug, Encode, Decode)]
@@ -179,6 +190,19 @@ impl State {
             }
             ActivityPubCommand::S2sAnnounce(cmd) => {
                 self.handle_s2s_announce(cmd).await?;
+            }
+            ActivityPubCommand::QueueDelivery(object_key) => {
+                block_in_place(|| self.queue.send_message(object_key.as_ref()))?;
+            }
+            ActivityPubCommand::ReceiveDelivery(visibility_timeout) => {
+                if let Some(res) =
+                    block_in_place(|| self.queue.receive_message(visibility_timeout))?
+                {
+                    return Ok(ClientResult::Ok(res.to_bytes()?));
+                }
+            }
+            ActivityPubCommand::AckDelivery(key, handle) => {
+                block_in_place(|| self.queue.delete_message(key, handle))?;
             }
         }
 

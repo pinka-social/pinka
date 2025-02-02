@@ -1,6 +1,7 @@
 #[macro_use]
 mod object_serde;
 mod repo;
+mod simple_queue;
 
 pub(crate) mod machine;
 pub(crate) mod model;
