@@ -224,27 +224,29 @@ async fn get_outbox(
                 // NB: outbox collection is displayed in reverse chronological order
                 .rev()
                 .map(|it| {
-                    let (obj_key, mut object) = it;
-                    let iri = object.as_ref().id().expect("stored object should have IRI");
+                    let (obj_key, mut activity) = it;
+                    // FIXME abstraction
+                    let object = activity.as_mut().get_mut("object").unwrap();
+                    let iri = object.id().expect("stored object should have IRI");
                     let likes = ctx_index.count_likes(&iri);
                     let shares = ctx_index.count_shares(&iri);
-                    object.augment_with(
-                        "likes",
+                    object.as_object_mut().unwrap().insert(
+                        "likes".to_string(),
                         json!({
                             "id": format!("{}/as/objects/{obj_key}/likes", config.init.activity_pub.base_url),
                             "type": "Collection",
                             "totalItems": likes
                         }),
                     );
-                    object.augment_with(
-                        "shares",
+                    object.as_object_mut().unwrap().insert(
+                        "shares".to_string(),
                         json!({
                             "id": format!("{}/as/objects/{obj_key}/shares", config.init.activity_pub.base_url),
                             "type": "Collection",
                             "totalItems": shares
                         }),
                     );
-                    object
+                    activity
                 })
                 .collect();
             let mut outbox = Collection::new()
