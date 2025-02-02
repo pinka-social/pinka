@@ -1,7 +1,7 @@
 use std::ops::Deref;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use fjall::PartitionHandle;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
@@ -222,7 +222,7 @@ impl ReplicateState {
     fn get_log_entry(&self, index: u64) -> anyhow::Result<LogEntry> {
         block_in_place(|| {
             self.log
-                .get(&index.to_be_bytes())
+                .get(index.to_be_bytes())
                 .context("get log entry failed")?
                 .ok_or_else(|| anyhow!("log entry index {index} does not exist"))
                 .and_then(|slice| {

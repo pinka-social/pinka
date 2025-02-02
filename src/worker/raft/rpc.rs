@@ -10,14 +10,13 @@ pub(crate) trait RaftSerDe {
     where
         Self: Encode<()>,
     {
-        let result = minicbor::to_vec(&self).context("unable to serialize payload")?;
-        Ok(result)
+        minicbor::to_vec(self).context("unable to serialize payload")
     }
     fn from_bytes<'b>(bytes: &'b [u8]) -> Result<Self>
     where
         Self: Decode<'b, ()>,
     {
-        Ok(minicbor::decode(&bytes).context("unable to deserialize payload")?)
+        minicbor::decode(bytes).context("unable to deserialize payload")
     }
 }
 

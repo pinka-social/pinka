@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use ractor::{ActorRef, DerivedActorRef};
 use ractor_cluster::RactorMessage;
 
@@ -32,8 +32,10 @@ impl From<RaftMsg> for RaftAppliedMsg {
 }
 
 pub(crate) fn get_raft_applied() -> Result<DerivedActorRef<RaftAppliedMsg>> {
-    for cell in ractor::pg::get_scoped_local_members(&"raft".into(), &RaftWorker::pg_name()) {
-        let worker: ActorRef<RaftMsg> = cell.into();
+    if let Some(cell) =
+        ractor::pg::get_scoped_local_members(&"raft".into(), &RaftWorker::pg_name()).first()
+    {
+        let worker: ActorRef<RaftMsg> = cell.clone().into();
         return Ok(worker.get_derived());
     }
     bail!("no local raft_worker")

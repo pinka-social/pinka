@@ -1,7 +1,7 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use ractor::{Actor, ActorRef};
 use ractor_cluster::NodeServer;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, stdin, stdout};
+use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::task::yield_now;
 use tracing::info;
 
@@ -27,7 +27,7 @@ pub(super) async fn run(repl_config: ReplConfig) -> Result<()> {
     let (server, _) = Actor::spawn(None, node_server, ()).await?;
     ractor_cluster::client_connect(&server, ("localhost", manhole.port)).await?;
 
-    while let Err(_) = manhole_ref(&repl_config.server.name) {
+    while manhole_ref(&repl_config.server.name).is_err() {
         yield_now().await;
     }
 
@@ -70,8 +70,10 @@ pub(super) async fn run(repl_config: ReplConfig) -> Result<()> {
 }
 
 fn manhole_ref(server_name: &str) -> Result<ActorRef<ManholeMsg>> {
-    for member in ractor::pg::get_scoped_members(&"manhole".into(), &server_name.into()) {
-        return Ok(member.into());
+    if let Some(member) =
+        ractor::pg::get_scoped_members(&"manhole".into(), &server_name.into()).first()
+    {
+        return Ok(member.clone().into());
     }
     bail!("unable to find enabled manhole for server");
 }
