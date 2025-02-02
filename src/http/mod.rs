@@ -203,18 +203,26 @@ async fn get_outbox(
         if params.has_page() {
             let query = params.to_query();
             let PageParams { before, after, .. } = params;
-            let first = params.first.and_then(|first| Some(first.clamp(0, 50)));
-            let last = params.last.and_then(|last| Some(last.clamp(0, 50)));
+            let first = params
+                .first
+                .or_else(|| after.as_ref().map(|_| 10))
+                .and_then(|first| Some(first.clamp(0, 50)));
+            let last = params
+                .last
+                .or_else(|| before.as_ref().map(|_| 10))
+                .and_then(|last| Some(last.clamp(0, 50)));
             let items: Vec<(ObjectKey, Object)> = index
                 .find_all(&uid, before, after, first, last)
                 .map_err(invalid)?;
-            let (prev, next) = if !items.is_empty() {
+            let (next, prev) = if !items.is_empty() {
                 (Some(items[0].0), Some(items.last().unwrap().0))
             } else {
                 (None, None)
             };
             let items = items
                 .into_iter()
+                // NB: outbox collection is displayed in reverse chronological order
+                .rev()
                 .map(|it| {
                     let (obj_key, mut object) = it;
                     let iri = object.as_ref().id().expect("stored object should have IRI");
@@ -244,26 +252,30 @@ async fn get_outbox(
                     "{}/users/{uid}/outbox?{query}",
                     config.init.activity_pub.base_url,
                 ))
-                .first(format!(
+                .part_of(format!(
+                    "{}/users/{uid}/outbox",
+                    config.init.activity_pub.base_url
+                ))
+                .last(format!(
                     "{}/users/{uid}/outbox?after={}",
                     config.init.activity_pub.base_url,
                     Uuid::nil().simple()
                 ))
-                .last(format!(
+                .first(format!(
                     "{}/users/{uid}/outbox?before={}",
                     config.init.activity_pub.base_url,
                     Uuid::max().simple()
                 ))
                 .with_ordered_items(items)
                 .ordered();
-            if let Some(id) = prev {
-                outbox = outbox.prev(&format!(
+            if let Some(id) = next {
+                outbox = outbox.next(&format!(
                     "{}/users/{uid}/outbox?before={id}",
                     config.init.activity_pub.base_url
                 ));
             }
-            if let Some(id) = next {
-                outbox = outbox.next(&format!(
+            if let Some(id) = prev {
+                outbox = outbox.prev(&format!(
                     "{}/users/{uid}/outbox?after={id}",
                     config.init.activity_pub.base_url
                 ));
@@ -275,12 +287,12 @@ async fn get_outbox(
                     "{}/users/{uid}/outbox",
                     config.init.activity_pub.base_url
                 ))
-                .first(format!(
+                .last(format!(
                     "{}/users/{uid}/outbox?after={}",
                     config.init.activity_pub.base_url,
                     Uuid::nil().simple()
                 ))
-                .last(format!(
+                .first(format!(
                     "{}/users/{uid}/outbox?before={}",
                     config.init.activity_pub.base_url,
                     Uuid::max().simple()
