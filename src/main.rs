@@ -207,20 +207,15 @@ async fn serve(config: RuntimeConfig, flags: Serve) -> Result<()> {
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
 
-    loop {
-        tokio::select! {
-            _ = http => {
-                error!("HTTP server crashed");
-                break;
-            }
-            _ = sigterm.recv() => {
-                info!("Received the terminate signal; stopping");
-                break;
-            }
-            _ = sigint.recv() => {
-                info!("Received the interrupt signal; stopping");
-                break;
-            }
+    tokio::select! {
+        _ = http => {
+            error!("HTTP server crashed");
+        }
+        _ = sigterm.recv() => {
+            info!("Received the terminate signal; stopping");
+        }
+        _ = sigint.recv() => {
+            info!("Received the interrupt signal; stopping");
         }
     }
 

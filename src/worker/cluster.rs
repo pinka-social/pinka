@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use ractor::concurrency::Duration;
 use ractor::{Actor, ActorProcessingErr, ActorRef, SupervisionEvent};
 use ractor_cluster::node::{NodeConnectionMode, NodeServerSessionInformation};
@@ -191,7 +191,7 @@ impl ClusterState {
                     )
                     .await
                 };
-                if let Err(_) = conn_result {
+                if conn_result.is_err() {
                     warn!(target: "raft", "unable to connect to {}@{}:{}", peer.name, peer.hostname, peer.port);
                 }
             });

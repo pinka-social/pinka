@@ -10,7 +10,7 @@ use std::ops::{Deref, RangeBounds};
 use std::time::Duration;
 
 pub(crate) use self::client::{
-    ClientResult, RaftClientMsg, get_raft_client, get_raft_local_client,
+    get_raft_client, get_raft_local_client, ClientResult, RaftClientMsg,
 };
 pub(crate) use self::log_entry::{LogEntry, LogEntryList, LogEntryValue};
 use self::replicate::{ReplicateArgs, ReplicateMsg, ReplicateWorker};
@@ -20,17 +20,17 @@ use self::rpc::{
     RequestVoteReply,
 };
 use self::state::RaftSaved;
-pub(crate) use self::state_machine::{RaftAppliedMsg, StateMachineMsg, get_raft_applied};
+pub(crate) use self::state_machine::{get_raft_applied, RaftAppliedMsg, StateMachineMsg};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use fjall::{KvSeparationOptions, PartitionCreateOptions, PartitionHandle};
-use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent, pg};
+use ractor::{pg, Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent};
 use ractor_cluster::{RactorClusterMessage, RactorMessage};
-use rand::{Rng, thread_rng};
+use rand::{thread_rng, Rng};
 use tokio::select;
-use tokio::sync::mpsc::{Sender, channel};
+use tokio::sync::mpsc::{channel, Sender};
 use tokio::task::block_in_place;
-use tokio::time::{Instant, sleep};
+use tokio::time::{sleep, Instant};
 use tracing::{debug, info, trace, warn};
 
 use crate::config::{RuntimeConfig, ServerConfig};
@@ -250,9 +250,11 @@ impl Actor for RaftWorker {
     ) -> Result<(), ActorProcessingErr> {
         info!(target: "lifecycle", "raft_worker started");
 
-        pg::join_scoped("raft".into(), RaftWorker::pg_name(), vec![
-            myself.get_cell(),
-        ]);
+        pg::join_scoped(
+            "raft".into(),
+            RaftWorker::pg_name(),
+            vec![myself.get_cell()],
+        );
         pg::monitor_scope("raft".into(), myself.get_cell());
         info!(target: "lifecycle", "joined raft process group");
 
@@ -515,7 +517,7 @@ impl RaftState {
             },
             name: self.peer_id(),
             parent: self.myself.clone(),
-            peer: server.into(),
+            peer: server,
             log: self.log.clone(),
             last_log_index: self.last_log_index,
             observer,
@@ -966,8 +968,7 @@ impl RaftState {
         debug_assert!(self.last_queued >= self.last_applied);
 
         // TODO configurable machine name
-        if let Some(cell) = ActorRef::where_is("state_machine".into()) {
-            let machine: ActorRef<StateMachineMsg> = cell.into();
+        if let Some(machine) = ActorRef::where_is("state_machine".into()) {
             // TODO avoid message pile up
             for log_entry in self.log_entry_range(self.last_queued + 1..=self.commit_index) {
                 ractor::cast!(machine, StateMachineMsg::Apply(log_entry?))?;
@@ -1018,7 +1019,7 @@ impl RaftState {
     fn get_log_entry(&self, index: u64) -> Result<LogEntry> {
         block_in_place(|| {
             self.log
-                .get(&index.to_be_bytes())
+                .get(index.to_be_bytes())
                 .context("get log entry failed")?
                 .ok_or_else(|| anyhow!("log entry index {index} does not exist"))
                 .and_then(|slice| {
@@ -1055,7 +1056,7 @@ impl RaftState {
         };
         let value_bytes = new_log_entry.to_bytes()?;
         block_in_place(|| -> Result<()> {
-            self.log.insert(&index.to_be_bytes(), value_bytes)?;
+            self.log.insert(index.to_be_bytes(), value_bytes)?;
             self.config.keyspace.persist(fjall::PersistMode::SyncAll)?;
             Ok(())
         })?;
@@ -1068,7 +1069,7 @@ impl RaftState {
         block_in_place(|| -> Result<()> {
             for entry in entries {
                 let value_bytes = entry.to_bytes()?;
-                self.log.insert(&entry.index.to_be_bytes(), value_bytes)?;
+                self.log.insert(entry.index.to_be_bytes(), value_bytes)?;
                 self.last_log_index = entry.index;
                 self.last_log_term = entry.term;
             }
@@ -1079,7 +1080,7 @@ impl RaftState {
     }
 
     fn remove_last_log_entry(&mut self) -> Result<()> {
-        block_in_place(|| self.log.remove(&self.last_log_index.to_be_bytes()))?;
+        block_in_place(|| self.log.remove(self.last_log_index.to_be_bytes()))?;
         self.last_log_index -= 1;
         self.last_log_term = self.get_log_entry(self.last_log_index)?.term;
         Ok(())

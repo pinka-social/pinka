@@ -1,6 +1,6 @@
 use anyhow::Result;
 use fjall::{KvSeparationOptions, PartitionCreateOptions};
-use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent, pg};
+use ractor::{pg, Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent};
 use ractor_cluster::{NodeServer, RactorClusterMessage};
 use tracing::warn;
 
@@ -41,9 +41,11 @@ impl Actor for Manhole {
         myself: ActorRef<Self::Msg>,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        pg::join_scoped("manhole".into(), state.server.name.clone(), vec![
-            myself.get_cell(),
-        ]);
+        pg::join_scoped(
+            "manhole".into(),
+            state.server.name.clone(),
+            vec![myself.get_cell()],
+        );
         state.spawn_node_server(myself).await?;
         Ok(())
     }
@@ -71,12 +73,9 @@ impl Actor for Manhole {
         message: SupervisionEvent,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        match message {
-            SupervisionEvent::ActorFailed(_actor_cell, error) => {
-                warn!(error, "manhole_node_server crashed, respawning...");
-                state.spawn_node_server(myself).await?;
-            }
-            _ => {}
+        if let SupervisionEvent::ActorFailed(_actor_cell, error) = message {
+            warn!(error, "manhole_node_server crashed, respawning...");
+            state.spawn_node_server(myself).await?;
         }
         Ok(())
     }

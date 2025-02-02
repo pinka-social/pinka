@@ -1,60 +1,23 @@
-use anyhow::{Error, Result, bail};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::config::ActivityPubConfig;
 
 use super::Object;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Actor(Value);
+pub(crate) struct Actor<'a>(Object<'a>);
 
-impl TryFrom<Object> for Actor {
-    type Error = Error;
-
-    fn try_from(object: Object) -> Result<Self, Self::Error> {
-        let value = object.as_ref();
-        if value.get("id").is_none() {
-            bail!("actor should have id property");
-        }
-        if value.get("name").is_none() {
-            bail!("actor should have name property");
-        }
-        Ok(Actor(object.0))
+impl<'a> From<Object<'a>> for Actor<'a> {
+    fn from(object: Object<'a>) -> Self {
+        Actor(object)
     }
 }
 
-impl AsRef<Value> for Actor {
-    fn as_ref(&self) -> &Value {
-        &self.0
-    }
-}
-
-impl AsMut<Value> for Actor {
-    fn as_mut(&mut self) -> &mut Value {
-        &mut self.0
-    }
-}
-
-impl From<Actor> for Value {
-    fn from(value: Actor) -> Self {
-        value.0
-    }
-}
-
-impl Actor {
+impl Actor<'_> {
     // TODO
-    pub(crate) fn enrich_with(mut self, config: &ActivityPubConfig) -> Self {
-        let map = self
-            .as_mut()
-            .as_object_mut()
-            .expect("Actor must be an JSON object");
-
+    pub(crate) fn enrich_with(self, config: &ActivityPubConfig) -> Self {
         let base_url = &config.base_url;
-        let id = map
-            .get("id")
-            .expect("Actor must have a local_id")
-            .as_str()
-            .expect("local_id must be a string");
+        let id = self.0.id().expect("Actor should have an IRI id");
         // TODO: correctly update @context
         let Value::Object(properties) = json!({
             "@context": "https://www.w3.org/ns/activitystreams",
@@ -66,9 +29,13 @@ impl Actor {
         }) else {
             unreachable!()
         };
-        map.extend(properties);
+        Actor(self.0.augment_with(properties))
+    }
+}
 
-        self
+impl From<Actor<'_>> for Value {
+    fn from(value: Actor<'_>) -> Self {
+        value.0.to_value()
     }
 }
 
@@ -95,15 +62,14 @@ mod tests {
                 "url": "https://objects.social.example.com/493d7fea0a23.jpg"
             }
         }))?;
-        let actor = Actor::try_from(object)?.enrich_with(&config);
+        let actor = Actor::from(object).enrich_with(&config);
         assert_eq!(
-            actor.as_ref(),
-            &json!({
+            actor,
+            Actor(Object::from(&json!({
                 "@context": "https://www.w3.org/ns/activitystreams",
                 "type": "Person",
                 "id": "https://social.example.com/users/john",
                 "name": "John Smith",
-                "following": "https://social.example.com/users/john/following",
                 "followers": "https://social.example.com/users/john/followers",
                 "inbox": "https://social.example.com/users/john/inbox",
                 "outbox": "https://social.example.com/users/john/outbox",
@@ -112,7 +78,7 @@ mod tests {
                     "mediaType": "image/jpeg",
                     "url": "https://objects.social.example.com/493d7fea0a23.jpg"
                 }
-            })
+            })))
         );
         Ok(())
     }

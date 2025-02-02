@@ -1,9 +1,9 @@
 use minicbor::{Decode, Encode};
 
-use super::PeerId;
 use super::rpc::RaftSerDe;
+use super::PeerId;
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Default, Clone, Encode, Decode)]
 pub(super) struct RaftSaved {
     /// Latest term this worker has seen (initialized to 0 on first boot,
     /// increases monotonically).
@@ -21,16 +21,6 @@ pub(super) struct RaftSaved {
     /// Last applied log entry index
     #[n(2)]
     pub(super) last_applied: u64,
-}
-
-impl Default for RaftSaved {
-    fn default() -> Self {
-        RaftSaved {
-            current_term: 0,
-            voted_for: None,
-            last_applied: 0,
-        }
-    }
 }
 
 impl RaftSerDe for RaftSaved {}

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use minicbor::{Decode, Encode};
 use ractor::{ActorRef, DerivedActorRef, RpcReplyPort};
 use ractor_cluster::RactorClusterMessage;
@@ -61,8 +61,10 @@ pub(crate) fn get_raft_client(name: &str) -> Result<DerivedActorRef<RaftClientMs
 }
 
 pub(crate) fn get_raft_local_client() -> Result<DerivedActorRef<RaftClientMsg>> {
-    for cell in ractor::pg::get_scoped_local_members(&"raft".into(), &RaftWorker::pg_name()) {
-        let worker: ActorRef<RaftMsg> = cell.into();
+    if let Some(cell) =
+        ractor::pg::get_scoped_local_members(&"raft".into(), &RaftWorker::pg_name()).first()
+    {
+        let worker: ActorRef<RaftMsg> = cell.clone().into();
         return Ok(worker.get_derived());
     }
     bail!("no local raft_worker")
