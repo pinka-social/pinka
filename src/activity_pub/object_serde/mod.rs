@@ -21,7 +21,29 @@ pub(crate) fn to_bytes(object: impl Into<Value>) -> Result<Vec<u8>> {
 }
 pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Object> {
     let Envelope::V1(value) = minicbor::decode(bytes).context("unable to deserialize payload")?;
-    Object::try_from(Value::from(value))
+    Ok(Object::from(Value::from(value)))
+}
+
+impl<C> Encode<C> for Object {
+    fn encode<W: minicbor::encode::Write>(
+        &self,
+        e: &mut minicbor::Encoder<W>,
+        ctx: &mut C,
+    ) -> std::result::Result<(), minicbor::encode::Error<W::Error>> {
+        let node_value: NodeValue = self.as_ref().clone().into();
+        node_value.encode(e, ctx)
+    }
+}
+
+impl<'b, C> Decode<'b, C> for Object {
+    fn decode(
+        d: &mut minicbor::Decoder<'b>,
+        ctx: &mut C,
+    ) -> std::result::Result<Self, minicbor::decode::Error> {
+        let node_value = NodeValue::decode(d, ctx)?;
+        let value = Value::from(node_value);
+        Ok(value.into())
+    }
 }
 
 #[derive(Debug)]
@@ -62,7 +84,7 @@ impl<'b, C> Decode<'b, C> for Symbol {
 }
 
 #[derive(Debug)]
-pub(crate) enum NodeValue {
+enum NodeValue {
     Null,
     Bool(bool),
     Number(f64),

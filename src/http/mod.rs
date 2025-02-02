@@ -319,7 +319,7 @@ async fn post_outbox(
         // Add actor info
         let act_key = ObjectKey::new();
         let obj_key = ObjectKey::new();
-        let object = Object::try_from(value).map_err(invalid)?.ensure_id(format!(
+        let object = Object::from(value).ensure_id(format!(
             "{}/as/objects/{obj_key}",
             config.init.activity_pub.base_url
         ));
@@ -335,7 +335,7 @@ async fn post_outbox(
             uid,
             act_key,
             obj_key,
-            node: Value::from(create).into(),
+            object: Value::from(create).into(),
         };
         let command = ActivityPubCommand::C2sCreate(scoped_cmd);
         ractor::call!(
@@ -358,7 +358,7 @@ async fn post_inbox(Path(uid): Path<String>, Json(value): Json<Value>) -> Result
         let scoped_cmd = S2sCommand {
             uid,
             obj_key: ObjectKey::new(),
-            node: value.into(),
+            object: value.into(),
         };
         let command = match obj_type {
             Some("Create") => ActivityPubCommand::S2sCreate(scoped_cmd),

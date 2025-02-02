@@ -1,19 +1,20 @@
 //! Storage friendly presentation of Activity Streams' core data model.
 
-use anyhow::{bail, Result};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Object(pub(super) Value);
 
-impl<'a> TryFrom<Value> for Object {
-    type Error = anyhow::Error;
-
-    fn try_from(value: Value) -> Result<Self> {
+impl From<Value> for Object {
+    fn from(value: Value) -> Self {
         if !value.is_object() {
-            bail!("value is not a JSON object");
+            // XXX: it is an error to create an Object from anything but a JSON
+            // object. It should be validated by upper layers. In case some slip
+            // through, we will just replace them with an empty object.
+            Object(Value::Object(Map::new()))
+        } else {
+            Object(value)
         }
-        Ok(Object(value))
     }
 }
 

@@ -11,7 +11,6 @@ use crate::worker::raft::{
 };
 
 use super::model::{Actor as AsActor, Create, JsonLdValue, Object};
-use super::object_serde::NodeValue;
 use super::repo::{ContextIndex, OutboxIndex};
 use super::{IriIndex, ObjectKey, ObjectRepo, UserIndex};
 
@@ -68,7 +67,7 @@ impl Actor for ActivityPubMachine {
 #[derive(Debug, Encode, Decode)]
 pub(crate) enum ActivityPubCommand {
     #[n(0)]
-    UpdateUser(#[n(0)] String, #[n(1)] NodeValue),
+    UpdateUser(#[n(0)] String, #[n(1)] Object),
     /// Client to Server - Create Activity
     #[n(1)]
     C2sCreate(#[n(0)] C2sCommand),
@@ -99,7 +98,7 @@ pub(crate) struct C2sCommand {
     #[n(2)]
     pub(crate) obj_key: ObjectKey,
     #[n(3)]
-    pub(crate) node: NodeValue,
+    pub(crate) object: Object,
 }
 
 #[derive(Debug, Encode, Decode)]
@@ -109,7 +108,7 @@ pub(crate) struct S2sCommand {
     #[n(1)]
     pub(crate) obj_key: ObjectKey,
     #[n(2)]
-    pub(crate) node: NodeValue,
+    pub(crate) object: Object,
 }
 
 impl ActivityPubCommand {
@@ -167,9 +166,7 @@ impl State {
 
         Ok(ClientResult::ok())
     }
-    async fn handle_new_user(&mut self, uid: String, node_value: NodeValue) -> Result<()> {
-        let value = Value::from(node_value);
-        let object = Object::try_from(value)?;
+    async fn handle_new_user(&mut self, uid: String, object: Object) -> Result<()> {
         let user = AsActor::try_from(object)?;
 
         block_in_place(|| -> Result<()> {
@@ -188,7 +185,7 @@ impl State {
             uid,
             act_key,
             obj_key,
-            node,
+            object: node,
         } = cmd;
         let value = Value::from(node);
         let object = Object::try_from(value)?;
@@ -206,7 +203,11 @@ impl State {
         Ok(())
     }
     async fn handle_s2s_create(&mut self, cmd: S2sCommand) -> Result<()> {
-        let S2sCommand { obj_key, node, .. } = cmd;
+        let S2sCommand {
+            obj_key,
+            object: node,
+            ..
+        } = cmd;
         let value = Value::from(node);
         if value.has_props(&["context"]) {
             // currently we only care activities mentioning our object
@@ -238,7 +239,11 @@ impl State {
         Ok(())
     }
     async fn handle_s2s_like(&mut self, cmd: S2sCommand) -> Result<()> {
-        let S2sCommand { obj_key, node, .. } = cmd;
+        let S2sCommand {
+            obj_key,
+            object: node,
+            ..
+        } = cmd;
         let value = Value::from(node);
         if value.has_props(&["object"]) {
             let Some(iri) = value.object_iri() else {
@@ -268,7 +273,11 @@ impl State {
         Ok(())
     }
     async fn handle_s2s_follow(&mut self, cmd: S2sCommand) -> Result<()> {
-        let S2sCommand { uid, obj_key, node } = cmd;
+        let S2sCommand {
+            uid,
+            obj_key,
+            object: node,
+        } = cmd;
         let value = Value::from(node);
         if value.has_props(&["object"]) {
             block_in_place(|| -> Result<()> {
@@ -295,7 +304,9 @@ impl State {
     /// * <https://www.w3.org/TR/activitystreams-vocabulary/#inverse>
     /// * <https://www.w3.org/wiki/ActivityPub/Primer/Referring_to_activities>
     async fn handle_s2s_undo(&mut self, cmd: S2sCommand) -> Result<()> {
-        let S2sCommand { uid, node, .. } = cmd;
+        let S2sCommand {
+            uid, object: node, ..
+        } = cmd;
         block_in_place(|| {
             let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
             let iri_index = IriIndex::new(self.keyspace.clone())?;
@@ -356,7 +367,7 @@ impl State {
         })
     }
     async fn handle_s2s_update(&mut self, cmd: S2sCommand) -> Result<()> {
-        let S2sCommand { node, .. } = cmd;
+        let S2sCommand { object: node, .. } = cmd;
         let value = Value::from(node);
         if value.has_props(&["object"]) {
             // let Some(iri) = value.object_iri() else {
@@ -379,7 +390,11 @@ impl State {
         Ok(())
     }
     async fn handle_s2s_announce(&mut self, cmd: S2sCommand) -> Result<()> {
-        let S2sCommand { obj_key, node, .. } = cmd;
+        let S2sCommand {
+            obj_key,
+            object: node,
+            ..
+        } = cmd;
         let value = Value::from(node);
         if value.has_props(&["object"]) {
             let Some(iri) = value.object_iri() else {
