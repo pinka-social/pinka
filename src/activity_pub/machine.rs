@@ -1,18 +1,19 @@
 use anyhow::{Context, Result};
-use fjall::Keyspace;
+use fjall::{Keyspace, PersistMode};
 use minicbor::{Decode, Encode};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use serde_json::Value;
-use tracing::info;
+use tokio::task::block_in_place;
+use tracing::{info, warn};
 
 use crate::worker::raft::{
-    ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg, get_raft_applied,
+    get_raft_applied, ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg,
 };
 
 use super::model::{Actor as AsActor, Create, JsonLdValue, Object};
 use super::object_serde::NodeValue;
 use super::repo::{ContextIndex, OutboxIndex};
-use super::{ObjectKey, ObjectRepo, UserIndex};
+use super::{IriIndex, ObjectKey, ObjectRepo, UserIndex};
 
 pub(crate) struct ActivityPubMachine;
 
@@ -171,11 +172,14 @@ impl State {
         let object = Object::try_from(value)?;
         let user = AsActor::try_from(object)?;
 
-        let mut b = self.keyspace.batch();
-        let user_index = UserIndex::new(self.keyspace.clone())?;
-
-        user_index.insert(&mut b, &uid, user)?;
-        b.commit()?;
+        block_in_place(|| -> Result<()> {
+            let mut b = self.keyspace.batch();
+            let user_index = UserIndex::new(self.keyspace.clone())?;
+            user_index.insert(&mut b, &uid, user)?;
+            b.commit()?;
+            self.keyspace.persist(PersistMode::SyncAll)?;
+            Ok(())
+        })?;
         Ok(())
     }
     // TODO effects
@@ -188,19 +192,21 @@ impl State {
         } = cmd;
         let value = Value::from(node);
         let object = Object::try_from(value)?;
-        let mut create = Create::try_from(object)?.with_actor("https://example.com/users/john");
-        let act_id = format!("pinka-activity:{}", act_key);
-        create.as_mut().set_id(&act_id);
+        let create = Create::try_from(object)?;
 
-        let mut b = self.keyspace.batch();
-        let outbox = OutboxIndex::new(self.keyspace.clone())?;
+        block_in_place(|| -> Result<()> {
+            let mut b = self.keyspace.batch();
+            let outbox = OutboxIndex::new(self.keyspace.clone())?;
+            outbox.insert_create(&mut b, uid, act_key, obj_key, create)?;
+            b.commit()?;
+            self.keyspace.persist(PersistMode::SyncAll)?;
+            Ok(())
+        })?;
 
-        outbox.insert_create(&mut b, uid, act_key, obj_key, create)?;
-        b.commit()?;
         Ok(())
     }
     async fn handle_s2s_create(&mut self, cmd: S2sCommand) -> Result<()> {
-        let S2sCommand { uid, obj_key, node } = cmd;
+        let S2sCommand { obj_key, node, .. } = cmd;
         let value = Value::from(node);
         if value.has_props(&["context"]) {
             // currently we only care activities mentioning our object
@@ -211,24 +217,28 @@ impl State {
             let iri = iri.to_string();
             let object = Object::try_from(value)?;
             // TODO let create = Create::try_from(object)?;
+            // TODO save the activity and the object
 
-            let mut b = self.keyspace.batch();
-            let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
-            let ctx_index = ContextIndex::new(self.keyspace.clone())?;
-            obj_repo.insert(&mut b, obj_key, object)?;
-            ctx_index.insert(&mut b, iri, obj_key)?;
-
-            b.commit()?;
+            block_in_place(|| -> Result<()> {
+                let mut b = self.keyspace.batch();
+                let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
+                let ctx_index = ContextIndex::new(self.keyspace.clone())?;
+                obj_repo.insert(&mut b, obj_key, object)?;
+                ctx_index.insert(&mut b, &iri, obj_key)?;
+                b.commit()?;
+                self.keyspace.persist(PersistMode::SyncAll)?;
+                Ok(())
+            })?;
         }
         Ok(())
     }
     async fn handle_s2s_delete(&mut self, cmd: S2sCommand) -> Result<()> {
-        let S2sCommand { uid, obj_key, node } = cmd;
+        let _ = cmd;
         // TODO
         Ok(())
     }
     async fn handle_s2s_like(&mut self, cmd: S2sCommand) -> Result<()> {
-        let S2sCommand { uid, obj_key, node } = cmd;
+        let S2sCommand { obj_key, node, .. } = cmd;
         let value = Value::from(node);
         if value.has_props(&["object"]) {
             let Some(iri) = value.object_iri() else {
@@ -236,43 +246,117 @@ impl State {
             };
             let iri = iri.to_string();
 
-            let mut b = self.keyspace.batch();
-            let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
-            let ctx_index = ContextIndex::new(self.keyspace.clone())?;
-            obj_repo.insert(&mut b, obj_key, value)?;
-            ctx_index.insert_likes(&mut b, iri, obj_key)?;
-
-            b.commit()?;
+            block_in_place(|| -> Result<()> {
+                let mut b = self.keyspace.batch();
+                let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
+                let ctx_index = ContextIndex::new(self.keyspace.clone())?;
+                if let Some(activity_iri) = value.id() {
+                    let iri_index = IriIndex::new(self.keyspace.clone())?;
+                    iri_index.insert(&mut b, activity_iri, obj_key)?;
+                }
+                obj_repo.insert(&mut b, obj_key, value)?;
+                ctx_index.insert_likes(&mut b, &iri, obj_key)?;
+                b.commit()?;
+                self.keyspace.persist(PersistMode::SyncAll)?;
+                Ok(())
+            })?;
         }
         Ok(())
     }
     async fn handle_s2s_dislike(&mut self, cmd: S2sCommand) -> Result<()> {
-        let S2sCommand { uid, obj_key, node } = cmd;
-        // TODO
+        let _ = cmd;
         Ok(())
     }
     async fn handle_s2s_follow(&mut self, cmd: S2sCommand) -> Result<()> {
         let S2sCommand { uid, obj_key, node } = cmd;
         let value = Value::from(node);
         if value.has_props(&["object"]) {
-            let mut b = self.keyspace.batch();
-            let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
-            let user_index = UserIndex::new(self.keyspace.clone())?;
-            obj_repo.insert(&mut b, obj_key, value)?;
-            user_index.insert_follower(&mut b, &uid, obj_key)?;
-
-            b.commit()?;
+            block_in_place(|| -> Result<()> {
+                let mut b = self.keyspace.batch();
+                let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
+                let user_index = UserIndex::new(self.keyspace.clone())?;
+                if let Some(activity_iri) = value.id() {
+                    let iri_index = IriIndex::new(self.keyspace.clone())?;
+                    iri_index.insert(&mut b, activity_iri, obj_key)?;
+                }
+                obj_repo.insert(&mut b, obj_key, value)?;
+                user_index.insert_follower(&mut b, &uid, obj_key)?;
+                b.commit()?;
+                self.keyspace.persist(PersistMode::SyncAll)?;
+                Ok(())
+            })?;
             // TODO send Accept or Reject back
         }
         Ok(())
     }
+    /// Undo previous activity.
+    ///
+    /// References:
+    /// * <https://www.w3.org/TR/activitystreams-vocabulary/#inverse>
+    /// * <https://www.w3.org/wiki/ActivityPub/Primer/Referring_to_activities>
     async fn handle_s2s_undo(&mut self, cmd: S2sCommand) -> Result<()> {
-        let S2sCommand { uid, obj_key, node } = cmd;
-        // TODO
-        Ok(())
+        let S2sCommand { uid, node, .. } = cmd;
+        block_in_place(|| {
+            let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
+            let iri_index = IriIndex::new(self.keyspace.clone())?;
+            // We can undo Follow and Like
+            let value = Value::from(node);
+            // FIXME abstraction
+            // Find the obj_key of the activity we should undo
+            let mut undo_obj_key = None;
+            if let Some(object) = value.get("object") {
+                if let Value::Object(map) = object {
+                    if let Some(Value::String(iri)) = map.get("id") {
+                        // We have an ID, but do we know this ID?
+                        if let Some(slice) = iri_index.find_one(&iri)? {
+                            undo_obj_key = Some(ObjectKey::try_from(slice.as_ref())?);
+                        } else {
+                            warn!(target: "apub", "unknown activity id {iri} mentioned in Undo");
+                        }
+                    }
+                    if undo_obj_key.is_none() {
+                        // The object does not have a known IRI.
+                        // TODO do our best to find the most recent activity from the actor
+                    }
+                }
+                if let Value::String(iri) = object {
+                    // We have an ID, but do we know this ID?
+                    if let Some(slice) = iri_index.find_one(&iri)? {
+                        undo_obj_key = Some(ObjectKey::try_from(slice.as_ref())?);
+                    } else {
+                        warn!(target: "apub", "unknown activity id {iri} mentioned in Undo");
+                    }
+                }
+            }
+            if let Some(undo_obj_key) = undo_obj_key {
+                if let Some(activity) = obj_repo.find_one(undo_obj_key)? {
+                    if let Some(object_iri) = activity.as_ref().object_iri() {
+                        if activity.as_ref().type_is("Like") {
+                            // Undo Like
+                            let ctx_index = ContextIndex::new(self.keyspace.clone())?;
+                            let mut b = self.keyspace.batch();
+                            ctx_index.remove_likes(&mut b, object_iri, undo_obj_key)?;
+                            b.commit()?;
+                            self.keyspace.persist(PersistMode::SyncAll)?;
+                        }
+                        if activity.as_ref().type_is("Follow") {
+                            // Undo Follow
+                            let user_index = UserIndex::new(self.keyspace.clone())?;
+                            let mut b = self.keyspace.batch();
+                            user_index.remove_follower(&mut b, &uid, undo_obj_key)?;
+                            b.commit()?;
+                            self.keyspace.persist(PersistMode::SyncAll)?;
+                        }
+                    }
+                } else {
+                    warn!(target: "apub", "unknown obj_key {undo_obj_key} when trying to Undo");
+                }
+            }
+            Ok(())
+        })
     }
     async fn handle_s2s_update(&mut self, cmd: S2sCommand) -> Result<()> {
-        let S2sCommand { uid, obj_key, node } = cmd;
+        let S2sCommand { node, .. } = cmd;
         let value = Value::from(node);
         if value.has_props(&["object"]) {
             // let Some(iri) = value.object_iri() else {
@@ -295,7 +379,7 @@ impl State {
         Ok(())
     }
     async fn handle_s2s_announce(&mut self, cmd: S2sCommand) -> Result<()> {
-        let S2sCommand { uid, obj_key, node } = cmd;
+        let S2sCommand { obj_key, node, .. } = cmd;
         let value = Value::from(node);
         if value.has_props(&["object"]) {
             let Some(iri) = value.object_iri() else {
@@ -303,13 +387,16 @@ impl State {
             };
             let iri = iri.to_string();
 
-            let mut b = self.keyspace.batch();
-            let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
-            let ctx_index = ContextIndex::new(self.keyspace.clone())?;
-            obj_repo.insert(&mut b, obj_key, value)?;
-            ctx_index.insert_shares(&mut b, iri, obj_key)?;
-
-            b.commit()?;
+            block_in_place(|| -> Result<()> {
+                let mut b = self.keyspace.batch();
+                let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
+                let ctx_index = ContextIndex::new(self.keyspace.clone())?;
+                obj_repo.insert(&mut b, obj_key, value)?;
+                ctx_index.insert_shares(&mut b, &iri, obj_key)?;
+                b.commit()?;
+                self.keyspace.persist(PersistMode::SyncAll)?;
+                Ok(())
+            })?;
         }
         Ok(())
     }

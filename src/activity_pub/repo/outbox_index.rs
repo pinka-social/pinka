@@ -1,24 +1,26 @@
-use anyhow::Result;
-use fjall::{Batch, Keyspace, PartitionCreateOptions, PartitionHandle};
+use anyhow::{Context, Result};
+use fjall::{Batch, Keyspace, PartitionCreateOptions};
 
-use crate::activity_pub::model::{BaseObject, Create, Object};
+use crate::activity_pub::model::{Create, Object};
 
+use super::iri_index::IriIndex;
 use super::xindex::IdObjIndex;
 use super::{IdObjIndexKey, ObjectKey, ObjectRepo};
 
 #[derive(Clone)]
 pub(crate) struct OutboxIndex {
     object_repo: ObjectRepo,
-    iri_index: PartitionHandle,
+    iri_index: IriIndex,
     outbox_index: IdObjIndex,
 }
 
 impl OutboxIndex {
     pub(crate) fn new(keyspace: Keyspace) -> Result<OutboxIndex> {
         let object_repo = ObjectRepo::new(keyspace.clone())?;
-        let options = PartitionCreateOptions::default();
-        let iri_index = keyspace.open_partition("iri_index", options.clone())?;
-        let outbox_index = IdObjIndex::new(keyspace.open_partition("outbox_index", options)?);
+        let iri_index = IriIndex::new(keyspace.clone())?;
+        let outbox_index = IdObjIndex::new(
+            keyspace.open_partition("outbox_index", PartitionCreateOptions::default())?,
+        );
         Ok(OutboxIndex {
             object_repo,
             iri_index,
@@ -34,12 +36,16 @@ impl OutboxIndex {
         act: Create,
     ) -> Result<()> {
         let obj = act.get_object();
-        let act_iri = act.id().expect("activity should have IRI");
-        let obj_iri = obj.id().expect("object should have IRI");
+        let obj_iri = obj
+            .as_ref()
+            .get("url")
+            .context("obj should have URL")?
+            .as_str()
+            .context("URL should be a string literal")?
+            .to_string();
         self.object_repo.insert(b, act_key, act)?;
         self.object_repo.insert(b, obj_key, obj)?;
-        b.insert(&self.iri_index, act_iri, act_key);
-        b.insert(&self.iri_index, obj_iri, obj_key);
+        self.iri_index.insert(b, &obj_iri, obj_key)?;
         self.outbox_index
             .insert(b, IdObjIndexKey::new(&uid, act_key))?;
         Ok(())

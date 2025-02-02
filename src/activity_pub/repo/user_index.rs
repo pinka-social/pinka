@@ -37,6 +37,9 @@ impl UserIndex {
     pub(crate) fn insert_follower(&self, b: &mut Batch, uid: &str, key: ObjectKey) -> Result<()> {
         self.follower_index.insert(b, IdObjIndexKey::new(uid, key))
     }
+    pub(crate) fn remove_follower(&self, b: &mut Batch, uid: &str, key: ObjectKey) -> Result<()> {
+        self.follower_index.remove(b, IdObjIndexKey::new(uid, key))
+    }
     pub(crate) fn find_one(&self, uid: &str) -> Result<Option<Object>> {
         if let Some(key) = self.user_index.get(uid)? {
             return Ok(self.object_repo.find_one(key)?);

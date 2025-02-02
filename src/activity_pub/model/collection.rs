@@ -1,4 +1,4 @@
-use serde_json::{Number, Value, json};
+use serde_json::{json, Number, Value};
 
 pub(crate) struct Collection(Value);
 
@@ -14,6 +14,13 @@ impl Collection {
             .as_object_mut()
             .unwrap()
             .insert("id".to_string(), Value::String(link.into()));
+        self
+    }
+    pub(crate) fn part_of(mut self, link: impl Into<String>) -> Collection {
+        self.0
+            .as_object_mut()
+            .unwrap()
+            .insert("partOf".to_string(), Value::String(link.into()));
         self
     }
     pub(crate) fn with_items<T>(mut self, items: Vec<T>) -> Collection

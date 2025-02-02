@@ -12,7 +12,7 @@ use anyhow::Result;
 use fd_lock::RwLock;
 use fjall::{KvSeparationOptions, PartitionCreateOptions};
 use ractor::Actor;
-use tokio::signal::unix::{SignalKind, signal};
+use tokio::signal::unix::{signal, SignalKind};
 use tracing::{error, info};
 
 use self::config::{
@@ -20,8 +20,8 @@ use self::config::{
     RaftConfig, ReplConfig, RuntimeConfig, ServerConfig,
 };
 use self::flags::{Dump, Pinka, PinkaCmd, RaftCmd, Serve};
-use self::worker::Supervisor;
 use self::worker::raft::{LogEntry, RaftSerDe};
+use self::worker::Supervisor;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -131,7 +131,7 @@ async fn main() -> Result<()> {
             path: "devdb".into(),
         },
         activity_pub: ActivityPubConfig {
-            base_url: "http://localhost".into(),
+            base_url: "http://localhost:7001".into(),
         },
     };
 
