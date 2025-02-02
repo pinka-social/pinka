@@ -24,27 +24,22 @@ impl ContextIndex {
             shares_index,
         })
     }
-    pub(crate) fn insert(&self, b: &mut Batch, iri: String, obj_key: ObjectKey) -> Result<()> {
+    pub(crate) fn insert(&self, b: &mut Batch, iri: &str, obj_key: ObjectKey) -> Result<()> {
         self.ctx_index
             .insert(b, IdObjIndexKey::new(&iri, obj_key))?;
         Ok(())
     }
-    pub(crate) fn insert_likes(
-        &self,
-        b: &mut Batch,
-        iri: String,
-        obj_key: ObjectKey,
-    ) -> Result<()> {
+    pub(crate) fn insert_likes(&self, b: &mut Batch, iri: &str, obj_key: ObjectKey) -> Result<()> {
         self.likes_index
             .insert(b, IdObjIndexKey::new(&iri, obj_key))?;
         Ok(())
     }
-    pub(crate) fn insert_shares(
-        &self,
-        b: &mut Batch,
-        iri: String,
-        obj_key: ObjectKey,
-    ) -> Result<()> {
+    pub(crate) fn remove_likes(&self, b: &mut Batch, iri: &str, obj_key: ObjectKey) -> Result<()> {
+        self.likes_index
+            .remove(b, IdObjIndexKey::new(&iri, obj_key))?;
+        Ok(())
+    }
+    pub(crate) fn insert_shares(&self, b: &mut Batch, iri: &str, obj_key: ObjectKey) -> Result<()> {
         self.shares_index
             .insert(b, IdObjIndexKey::new(&iri, obj_key))?;
         Ok(())

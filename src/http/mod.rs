@@ -125,25 +125,26 @@ fn blocking_get_object(
     let obj_repo = ObjectRepo::new(config.keyspace.clone()).map_err(ise)?;
     info!(%obj_key, "loading object");
     if let Some(mut object) = obj_repo.find_one(obj_key).map_err(ise)? {
-        let iri = object.as_ref().id().expect("stored object should have IRI");
-        let likes = ctx_index.count_likes(&iri);
-        let shares = ctx_index.count_shares(&iri);
-        object.augment_with(
-            "likes",
-            json!({
-                "id": format!("{}/as/objects/{obj_key}/likes", config.init.activity_pub.base_url),
-                "type": "Collection",
-                "totalItems": likes
-            }),
-        );
-        object.augment_with(
-            "shares",
-            json!({
-                "id": format!("{}/as/objects/{obj_key}/shares", config.init.activity_pub.base_url),
-                "type": "Collection",
-                "totalItems": shares
-            }),
-        );
+        if let Some(iri) = object.as_ref().id() {
+            let likes = ctx_index.count_likes(&iri);
+            let shares = ctx_index.count_shares(&iri);
+            object.augment_with(
+                "likes",
+                json!({
+                    "id": format!("{}/as/objects/{obj_key}/likes", config.init.activity_pub.base_url),
+                    "type": "Collection",
+                    "totalItems": likes
+                }),
+            );
+            object.augment_with(
+                "shares",
+                json!({
+                    "id": format!("{}/as/objects/{obj_key}/shares", config.init.activity_pub.base_url),
+                    "type": "Collection",
+                    "totalItems": shares
+                }),
+            );
+        }
         return Ok(Json(object.into()));
     }
     Err(StatusCode::NOT_FOUND)

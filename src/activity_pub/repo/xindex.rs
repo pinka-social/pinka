@@ -19,6 +19,10 @@ impl IdObjIndex {
         b.insert(&self.index, id_obj_key, []);
         Ok(())
     }
+    pub(super) fn remove(&self, b: &mut Batch, id_obj_key: IdObjIndexKey) -> Result<()> {
+        b.remove(&self.index, id_obj_key);
+        Ok(())
+    }
     pub(super) fn count(&self, id: &str) -> u64 {
         // FIXME optimize scanning
         self.index.prefix(id).count() as u64
