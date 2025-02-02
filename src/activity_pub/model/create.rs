@@ -23,7 +23,7 @@ impl TryFrom<Object<'_>> for Create<'static> {
             bail!("Object must have type property");
         }
         // TODO: copy @context to activity?
-        // value.as_object_mut().unwrap().remove("@context");
+        let object = object.strip_context();
 
         let mut create = json!({
             "@context": "https://www.w3.org/ns/activitystreams",
@@ -113,7 +113,7 @@ mod tests {
             .ensure_id("https://example.net/~mallory/87374")
             .with_actor("https://example.net/~mallory");
 
-        assert_eq!(result, activity);
+        assert_eq!(activity, result);
         Ok(())
     }
 }

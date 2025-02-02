@@ -59,7 +59,7 @@ impl Object<'_> {
     }
     pub(crate) fn get_string_array(&self, prop: &str) -> Option<Value> {
         if let Some(s) = self.get_str(prop) {
-            return Some(Value::Array(vec![s.into()]));
+            return Some(Value::String(s.into()));
         }
         if let Some(Value::Array(array)) = self.0.get(prop) {
             if array.iter().all(|v| v.is_string()) {
@@ -99,6 +99,12 @@ impl Object<'_> {
     }
     pub(crate) fn to_value(&self) -> Value {
         self.0.clone().into_owned()
+    }
+    pub(crate) fn strip_context(self) -> Self {
+        let mut obj = self.0.into_owned();
+        let obj_map = obj.as_object_mut().unwrap();
+        obj_map.remove("@context");
+        Object(Cow::Owned(obj))
     }
     pub(crate) fn ensure_id(self, iri: impl Into<String>) -> Self {
         let mut obj = self.0.into_owned();

@@ -62,7 +62,7 @@ mod tests {
                 "url": "https://objects.social.example.com/493d7fea0a23.jpg"
             }
         }))?;
-        let actor = Actor::try_from(object)?.enrich_with(&config);
+        let actor = Actor::from(object).enrich_with(&config);
         assert_eq!(
             actor,
             Actor(Object::from(&json!({
@@ -70,7 +70,6 @@ mod tests {
                 "type": "Person",
                 "id": "https://social.example.com/users/john",
                 "name": "John Smith",
-                "following": "https://social.example.com/users/john/following",
                 "followers": "https://social.example.com/users/john/followers",
                 "inbox": "https://social.example.com/users/john/inbox",
                 "outbox": "https://social.example.com/users/john/outbox",
