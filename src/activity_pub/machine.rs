@@ -217,6 +217,7 @@ impl State {
             let iri = iri.to_string();
             let object = Object::try_from(value)?;
             // TODO let create = Create::try_from(object)?;
+            // TODO save the activity and the object
 
             block_in_place(|| -> Result<()> {
                 let mut b = self.keyspace.batch();

@@ -34,8 +34,42 @@
     - [ ] Follow / unfollow
     - [ ] Moderation
     - [ ] Spam detection
-- [x] ActivityPub endpoints
-    - [x] Client to Server Interactions
+- [ ] ActivityPub endpoints
+    - [ ] Collections
+        - [x] Outbox
+        - [x] Inbox
+        - [x] Followers
+        - [ ] Following
+        - [ ] Liked
+        - [x] Likes
+        - [x] Shares
+    - [ ] Client to Server Interactions
         - [x] Create Activity
+        - [ ] Update Activity
+        - [ ] Delete Activity
+        - [ ] Follow Activity
+        - [ ] Accept Activity
+        - [ ] Reject Activity
+        - [ ] Add Activity
+        - [ ] Remove Activity
+        - [ ] Like Activity
+        - [ ] Announce Activity
+        - [ ] Block Activity
+        - [ ] Undo Activity
+        - [ ] Delivery
+    - [ ] Server to Server Interactions
+        - [ ] Create Activity
+        - [ ] Update Activity
+        - [ ] Delete Activity
+        - [x] Follow Activity
+        - [ ] Accept Activity
+        - [ ] Reject Activity
+        - [ ] Add Activity
+        - [ ] Remove Activity
+        - [x] Like Activity
+        - [x] Announce Activity
+        - [ ] Block Activity
+        - [x] Undo Activity
+        - [ ] Delivery
 - [ ] RESTful endpoints for webui
 - [ ] Webmention
