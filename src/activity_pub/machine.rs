@@ -17,6 +17,11 @@ pub(crate) struct ActivityPubMachine;
 
 pub(crate) struct State {
     keyspace: Keyspace,
+    user_index: UserIndex,
+    outbox_index: OutboxIndex,
+    ctx_index: ContextIndex,
+    iri_index: IriIndex,
+    obj_repo: ObjectRepo,
 }
 
 pub(crate) struct ActivityPubMachineInit {
@@ -34,7 +39,21 @@ impl Actor for ActivityPubMachine {
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         let ActivityPubMachineInit { keyspace } = args;
-        Ok(State { keyspace })
+        block_in_place(|| {
+            let user_index = UserIndex::new(keyspace.clone())?;
+            let outbox_index = OutboxIndex::new(keyspace.clone())?;
+            let ctx_index = ContextIndex::new(keyspace.clone())?;
+            let iri_index = IriIndex::new(keyspace.clone())?;
+            let obj_repo = ObjectRepo::new(keyspace.clone())?;
+            Ok(State {
+                keyspace,
+                user_index,
+                outbox_index,
+                ctx_index,
+                iri_index,
+                obj_repo,
+            })
+        })
     }
 
     async fn handle(
@@ -170,8 +189,7 @@ impl State {
 
         block_in_place(|| -> Result<()> {
             let mut b = self.keyspace.batch();
-            let user_index = UserIndex::new(self.keyspace.clone())?;
-            user_index.insert(&mut b, &uid, user)?;
+            self.user_index.insert(&mut b, &uid, user)?;
             b.commit()?;
             self.keyspace.persist(PersistMode::SyncAll)?;
             Ok(())
@@ -190,8 +208,8 @@ impl State {
 
         block_in_place(|| -> Result<()> {
             let mut b = self.keyspace.batch();
-            let outbox = OutboxIndex::new(self.keyspace.clone())?;
-            outbox.insert_create(&mut b, uid, act_key, obj_key, create)?;
+            self.outbox_index
+                .insert_create(&mut b, uid, act_key, obj_key, create)?;
             b.commit()?;
             self.keyspace.persist(PersistMode::SyncAll)?;
             Ok(())
@@ -215,10 +233,8 @@ impl State {
 
             block_in_place(|| -> Result<()> {
                 let mut b = self.keyspace.batch();
-                let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
-                let ctx_index = ContextIndex::new(self.keyspace.clone())?;
-                obj_repo.insert(&mut b, obj_key, object)?;
-                ctx_index.insert(&mut b, &iri, obj_key)?;
+                self.obj_repo.insert(&mut b, obj_key, object)?;
+                self.ctx_index.insert(&mut b, &iri, obj_key)?;
                 b.commit()?;
                 self.keyspace.persist(PersistMode::SyncAll)?;
                 Ok(())
@@ -243,14 +259,11 @@ impl State {
 
             block_in_place(|| -> Result<()> {
                 let mut b = self.keyspace.batch();
-                let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
-                let ctx_index = ContextIndex::new(self.keyspace.clone())?;
                 if let Some(activity_iri) = object.id() {
-                    let iri_index = IriIndex::new(self.keyspace.clone())?;
-                    iri_index.insert(&mut b, activity_iri, obj_key)?;
+                    self.iri_index.insert(&mut b, activity_iri, obj_key)?;
                 }
-                obj_repo.insert(&mut b, obj_key, object)?;
-                ctx_index.insert_likes(&mut b, &iri, obj_key)?;
+                self.obj_repo.insert(&mut b, obj_key, object)?;
+                self.ctx_index.insert_likes(&mut b, &iri, obj_key)?;
                 b.commit()?;
                 self.keyspace.persist(PersistMode::SyncAll)?;
                 Ok(())
@@ -271,14 +284,11 @@ impl State {
         if object.has_props(&["object"]) {
             block_in_place(|| -> Result<()> {
                 let mut b = self.keyspace.batch();
-                let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
-                let user_index = UserIndex::new(self.keyspace.clone())?;
                 if let Some(activity_iri) = object.id() {
-                    let iri_index = IriIndex::new(self.keyspace.clone())?;
-                    iri_index.insert(&mut b, activity_iri, obj_key)?;
+                    self.iri_index.insert(&mut b, activity_iri, obj_key)?;
                 }
-                obj_repo.insert(&mut b, obj_key, object)?;
-                user_index.insert_follower(&mut b, &uid, obj_key)?;
+                self.obj_repo.insert(&mut b, obj_key, object)?;
+                self.user_index.insert_follower(&mut b, &uid, obj_key)?;
                 b.commit()?;
                 self.keyspace.persist(PersistMode::SyncAll)?;
                 Ok(())
@@ -297,15 +307,13 @@ impl State {
             uid, object: undo, ..
         } = cmd;
         block_in_place(|| {
-            let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
-            let iri_index = IriIndex::new(self.keyspace.clone())?;
             // We can undo Follow and Like
             // FIXME abstraction
             // Find the obj_key of the activity we should undo
             let mut undo_obj_key = None;
             if let Some(iri) = undo.get_node_iri("object") {
                 // We have an ID, but do we know this ID?
-                if let Some(slice) = iri_index.find_one(iri)? {
+                if let Some(slice) = self.iri_index.find_one(iri)? {
                     undo_obj_key = Some(ObjectKey::try_from(slice.as_ref())?);
                 } else {
                     warn!(target: "apub", "unknown activity id {iri} mentioned in Undo");
@@ -316,21 +324,21 @@ impl State {
                 }
             }
             if let Some(undo_obj_key) = undo_obj_key {
-                if let Some(activity) = obj_repo.find_one(undo_obj_key)? {
+                if let Some(activity) = self.obj_repo.find_one(undo_obj_key)? {
                     if let Some(object_iri) = activity.get_node_iri("object") {
                         if activity.type_is("Like") {
                             // Undo Like
-                            let ctx_index = ContextIndex::new(self.keyspace.clone())?;
                             let mut b = self.keyspace.batch();
-                            ctx_index.remove_likes(&mut b, object_iri, undo_obj_key)?;
+                            self.ctx_index
+                                .remove_likes(&mut b, object_iri, undo_obj_key)?;
                             b.commit()?;
                             self.keyspace.persist(PersistMode::SyncAll)?;
                         }
                         if activity.type_is("Follow") {
                             // Undo Follow
-                            let user_index = UserIndex::new(self.keyspace.clone())?;
                             let mut b = self.keyspace.batch();
-                            user_index.remove_follower(&mut b, &uid, undo_obj_key)?;
+                            self.user_index
+                                .remove_follower(&mut b, &uid, undo_obj_key)?;
                             b.commit()?;
                             self.keyspace.persist(PersistMode::SyncAll)?;
                         }
@@ -378,10 +386,8 @@ impl State {
 
             block_in_place(|| -> Result<()> {
                 let mut b = self.keyspace.batch();
-                let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
-                let ctx_index = ContextIndex::new(self.keyspace.clone())?;
-                obj_repo.insert(&mut b, obj_key, announce)?;
-                ctx_index.insert_shares(&mut b, &iri, obj_key)?;
+                self.obj_repo.insert(&mut b, obj_key, announce)?;
+                self.ctx_index.insert_shares(&mut b, &iri, obj_key)?;
                 b.commit()?;
                 self.keyspace.persist(PersistMode::SyncAll)?;
                 Ok(())
