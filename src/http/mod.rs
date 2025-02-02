@@ -90,8 +90,7 @@ async fn get_object_by_id(
         let obj_key = ObjectKey::from_str(&obj_key)
             .context("invalid UUID")
             .map_err(invalid)?;
-        let iri = format!("{}/as/objects/{obj_key}", config.init.activity_pub.base_url);
-        blocking_get_object_by_iri(&config, &iri, obj_key)
+        blocking_get_object(&config, obj_key)
     })
 }
 
@@ -114,19 +113,19 @@ async fn get_object_by_iri(
         let obj_key = ObjectKey::try_from(obj_key.as_ref())
             .context("invalid UUID")
             .map_err(invalid)?;
-        blocking_get_object_by_iri(&config, &iri, obj_key)
+        blocking_get_object(&config, obj_key)
     })
 }
 
-fn blocking_get_object_by_iri(
+fn blocking_get_object(
     config: &RuntimeConfig,
-    iri: &str,
     obj_key: ObjectKey,
 ) -> Result<Json<Value>, StatusCode> {
     let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
     let obj_repo = ObjectRepo::new(config.keyspace.clone()).map_err(ise)?;
-    info!(iri, "loading object");
+    info!(%obj_key, "loading object");
     if let Some(mut object) = obj_repo.find_one(obj_key).map_err(ise)? {
+        let iri = object.as_ref().id().expect("stored object should have IRI");
         let likes = ctx_index.count_likes(&iri);
         let shares = ctx_index.count_shares(&iri);
         object.augment_with(
@@ -200,6 +199,7 @@ async fn get_outbox(
 ) -> Result<Json<Value>, StatusCode> {
     block_in_place(|| {
         let index = OutboxIndex::new(config.keyspace.clone()).map_err(ise)?;
+        let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
         if params.has_page() {
             let query = params.to_query();
             let PageParams { before, after, .. } = params;
@@ -213,7 +213,32 @@ async fn get_outbox(
             } else {
                 (None, None)
             };
-            let items = items.into_iter().map(|it| it.1).collect();
+            let items = items
+                .into_iter()
+                .map(|it| {
+                    let (obj_key, mut object) = it;
+                    let iri = object.as_ref().id().expect("stored object should have IRI");
+                    let likes = ctx_index.count_likes(&iri);
+                    let shares = ctx_index.count_shares(&iri);
+                    object.augment_with(
+                        "likes",
+                        json!({
+                            "id": format!("{}/as/objects/{obj_key}/likes", config.init.activity_pub.base_url),
+                            "type": "Collection",
+                            "totalItems": likes
+                        }),
+                    );
+                    object.augment_with(
+                        "shares",
+                        json!({
+                            "id": format!("{}/as/objects/{obj_key}/shares", config.init.activity_pub.base_url),
+                            "type": "Collection",
+                            "totalItems": shares
+                        }),
+                    );
+                    object
+                })
+                .collect();
             let mut outbox = Collection::new()
                 .id(format!(
                     "{}/users/{uid}/outbox?{query}",
