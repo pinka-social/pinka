@@ -87,7 +87,7 @@ impl Collection {
         );
         self
     }
-    pub(crate) fn to_page(mut self) -> CollectionPage {
+    pub(crate) fn into_page(mut self) -> CollectionPage {
         let ty = self.0.get("type").unwrap().as_str().unwrap();
         match ty {
             "Collection" => {

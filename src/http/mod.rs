@@ -13,7 +13,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::activity_pub::machine::{ActivityPubCommand, C2sCommand, S2sCommand};
-use crate::activity_pub::model::{Actor, Collection, Create, JsonLdValue, Object};
+use crate::activity_pub::model::{Actor, Collection, Create, Object};
 use crate::activity_pub::{ContextIndex, IriIndex, ObjectKey, ObjectRepo, OutboxIndex, UserIndex};
 use crate::config::RuntimeConfig;
 use crate::worker::raft::{get_raft_local_client, LogEntryValue, RaftClientMsg};
@@ -74,7 +74,7 @@ async fn get_actor(
     block_in_place(|| {
         let user_index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
         if let Some(object) = user_index.find_one(&uid).map_err(ise)? {
-            let raw_actor = Actor::try_from(object).map_err(invalid)?;
+            let raw_actor = Actor::from(object);
             let actor = raw_actor.enrich_with(&config.init.activity_pub);
             return Ok(Json(actor.into()));
         }
@@ -124,19 +124,18 @@ fn blocking_get_object(
     let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
     let obj_repo = ObjectRepo::new(config.keyspace.clone()).map_err(ise)?;
     info!(%obj_key, "loading object");
-    if let Some(mut object) = obj_repo.find_one(obj_key).map_err(ise)? {
-        if let Some(iri) = object.as_ref().id() {
-            let likes = ctx_index.count_likes(&iri);
-            let shares = ctx_index.count_shares(&iri);
-            object.augment_with(
+    if let Some(object) = obj_repo.find_one(obj_key).map_err(ise)? {
+        if let Some(iri) = object.id() {
+            let likes = ctx_index.count_likes(iri);
+            let shares = ctx_index.count_shares(iri);
+            let object = object.augment(
                 "likes",
                 json!({
                     "id": format!("{}/as/objects/{obj_key}/likes", config.init.activity_pub.base_url),
                     "type": "Collection",
                     "totalItems": likes
                 }),
-            );
-            object.augment_with(
+            ).augment(
                 "shares",
                 json!({
                     "id": format!("{}/as/objects/{obj_key}/shares", config.init.activity_pub.base_url),
@@ -144,6 +143,7 @@ fn blocking_get_object(
                     "totalItems": shares
                 }),
             );
+            return Ok(Json(object.into()));
         }
         return Ok(Json(object.into()));
     }
@@ -168,19 +168,20 @@ async fn get_object_likes_shares(
             "shares" => ctx_index.count_shares(&iri),
             _ => unreachable!(),
         };
-        return Ok(Json(json!({
+        Ok(Json(json!({
             "@context": "https://www.w3.org/ns/activitystreams",
             "id": format!("{}/as/objects/{obj_key}/{prop}", config.init.activity_pub.base_url),
             "type": "Collection",
             "totalItems": count
-        })));
+        })))
     })
 }
 
 async fn post_actor(Path(uid): Path<String>, Json(value): Json<Value>) -> Result<(), StatusCode> {
-    if value.type_is("Person") {
+    let object = Object::from(value);
+    if object.type_is("Person") {
         let client = get_raft_local_client().map_err(ise)?;
-        let command = ActivityPubCommand::UpdateUser(uid, value.into());
+        let command = ActivityPubCommand::UpdateUser(uid, object);
         ractor::call!(
             client,
             RaftClientMsg::ClientRequest,
@@ -207,11 +208,11 @@ async fn get_outbox(
             let first = params
                 .first
                 .or_else(|| after.as_ref().map(|_| 10))
-                .and_then(|first| Some(first.clamp(0, 50)));
+                .map(|first| first.clamp(0, 50));
             let last = params
                 .last
                 .or_else(|| before.as_ref().map(|_| 10))
-                .and_then(|last| Some(last.clamp(0, 50)));
+                .map(|last| last.clamp(0, 50));
             let items: Vec<(ObjectKey, Object)> = index
                 .find_all(&uid, before, after, first, last)
                 .map_err(invalid)?;
@@ -225,22 +226,19 @@ async fn get_outbox(
                 // NB: outbox collection is displayed in reverse chronological order
                 .rev()
                 .map(|it| {
-                    let (obj_key, mut activity) = it;
+                    let (obj_key, activity) = it;
                     // FIXME abstraction
-                    let object = activity.as_mut().get_mut("object").unwrap();
+                    let object = activity.get_node_object("object").unwrap();
                     let iri = object.id().expect("stored object should have IRI");
-                    let likes = ctx_index.count_likes(&iri);
-                    let shares = ctx_index.count_shares(&iri);
-                    object.as_object_mut().unwrap().insert(
-                        "likes".to_string(),
+                    let likes = ctx_index.count_likes(iri);
+                    let shares = ctx_index.count_shares(iri);
+                    let activity = activity.augment_node("object", "likes",
                         json!({
                             "id": format!("{}/as/objects/{obj_key}/likes", config.init.activity_pub.base_url),
                             "type": "Collection",
                             "totalItems": likes
                         }),
-                    );
-                    object.as_object_mut().unwrap().insert(
-                        "shares".to_string(),
+                    ).augment_node("object", "shares", 
                         json!({
                             "id": format!("{}/as/objects/{obj_key}/shares", config.init.activity_pub.base_url),
                             "type": "Collection",
@@ -272,18 +270,18 @@ async fn get_outbox(
                 .with_ordered_items(items)
                 .ordered();
             if let Some(id) = next {
-                outbox = outbox.next(&format!(
+                outbox = outbox.next(format!(
                     "{}/users/{uid}/outbox?before={id}",
                     config.init.activity_pub.base_url
                 ));
             }
             if let Some(id) = prev {
-                outbox = outbox.prev(&format!(
+                outbox = outbox.prev(format!(
                     "{}/users/{uid}/outbox?after={id}",
                     config.init.activity_pub.base_url
                 ));
             }
-            Ok(Json(outbox.to_page().into()))
+            Ok(Json(outbox.into_page().into()))
         } else {
             let outbox = Collection::new()
                 .id(format!(
@@ -312,20 +310,18 @@ async fn post_outbox(
     Path(uid): Path<String>,
     Json(value): Json<Value>,
 ) -> Result<(), StatusCode> {
-    if !value.is_object() {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    if !value.is_activity() {
+    let object = Object::from(value);
+    if !object.is_activity() {
         // Add actor info
         let act_key = ObjectKey::new();
         let obj_key = ObjectKey::new();
-        let object = Object::from(value).ensure_id(format!(
+        let object = object.ensure_id(format!(
             "{}/as/objects/{obj_key}",
             config.init.activity_pub.base_url
         ));
         let create = Create::try_from(object)
             .map_err(invalid)?
-            .with_id(format!(
+            .ensure_id(format!(
                 "{}/as/objects/{act_key}",
                 config.init.activity_pub.base_url
             ))
@@ -351,14 +347,15 @@ async fn post_outbox(
 }
 
 async fn post_inbox(Path(uid): Path<String>, Json(value): Json<Value>) -> Result<(), StatusCode> {
-    if value.is_inbox_activity() {
+    let object = Object::from(value);
+    if object.is_inbox_activity() {
         let client = get_raft_local_client().map_err(ise)?;
-        let obj_type = value.obj_type().map(str::to_string);
-        let obj_type = obj_type.as_ref().map(String::as_str);
+        let obj_type = object.get_first_type();
+        let obj_type = obj_type.as_deref();
         let scoped_cmd = S2sCommand {
             uid,
             obj_key: ObjectKey::new(),
-            object: value.into(),
+            object,
         };
         let command = match obj_type {
             Some("Create") => ActivityPubCommand::S2sCreate(scoped_cmd),
@@ -380,7 +377,7 @@ async fn post_inbox(Path(uid): Path<String>, Json(value): Json<Value>) -> Result
         .map_err(ise)?;
         return Ok(());
     }
-    return Ok(());
+    Ok(())
 }
 
 async fn get_followers(
@@ -393,8 +390,8 @@ async fn get_followers(
         if params.has_page() {
             let query = params.to_query();
             let PageParams { before, after, .. } = params;
-            let first = params.first.and_then(|first| Some(first.clamp(0, 50)));
-            let last = params.last.and_then(|last| Some(last.clamp(0, 50)));
+            let first = params.first.map(|first| first.clamp(0, 50));
+            let last = params.last.map(|last| last.clamp(0, 50));
             let items: Vec<(ObjectKey, String)> = index
                 .find_followers(&uid, before, after, first, last)
                 .map_err(invalid)?;
@@ -422,18 +419,18 @@ async fn get_followers(
                 .with_ordered_items(items)
                 .ordered();
             if let Some(id) = prev {
-                followers = followers.prev(&format!(
+                followers = followers.prev(format!(
                     "{}/users/{uid}/followers?before={id}",
                     config.init.activity_pub.base_url
                 ));
             }
             if let Some(id) = next {
-                followers = followers.next(&format!(
+                followers = followers.next(format!(
                     "{}/users/{uid}/followers?after={id}",
                     config.init.activity_pub.base_url
                 ));
             }
-            Ok(Json(followers.to_page().into()))
+            Ok(Json(followers.into_page().into()))
         } else {
             let followers = Collection::new()
                 .id(format!(

@@ -35,16 +35,15 @@ impl OutboxIndex {
         obj_key: ObjectKey,
         act: Create,
     ) -> Result<()> {
-        let obj = act.get_object();
+        let obj = act
+            .get_object()
+            .context("Create activity should have inner object")?;
         let obj_iri = obj
-            .as_ref()
-            .get("url")
-            .context("obj should have URL")?
-            .as_str()
-            .context("URL should be a string literal")?
+            .get_str("url")
+            .context("obj should have string literal URL")?
             .to_string();
-        self.object_repo.insert(b, act_key, act)?;
         self.object_repo.insert(b, obj_key, obj)?;
+        self.object_repo.insert(b, act_key, act)?;
         self.iri_index.insert(b, &obj_iri, obj_key)?;
         self.outbox_index
             .insert(b, IdObjIndexKey::new(&uid, act_key))?;

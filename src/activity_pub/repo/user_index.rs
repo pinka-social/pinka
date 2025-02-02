@@ -1,7 +1,7 @@
 use anyhow::Result;
-use fjall::{Batch, Keyspace, PartitionCreateOptions, PartitionHandle, UserKey};
+use fjall::{Batch, Keyspace, PartitionCreateOptions, PartitionHandle};
 
-use crate::activity_pub::model::{Actor, BaseObject, Object};
+use crate::activity_pub::model::{Actor, Object};
 
 use super::xindex::IdObjIndex;
 use super::{IdObjIndexKey, ObjectKey, ObjectRepo};
@@ -42,7 +42,7 @@ impl UserIndex {
     }
     pub(crate) fn find_one(&self, uid: &str) -> Result<Option<Object>> {
         if let Some(key) = self.user_index.get(uid)? {
-            return Ok(self.object_repo.find_one(key)?);
+            return self.object_repo.find_one(key);
         }
         Ok(None)
     }
@@ -65,7 +65,7 @@ impl UserIndex {
             if let Some(obj) = self.object_repo.find_one(key.as_ref())? {
                 items.push((
                     ObjectKey::try_from(key.as_ref())?,
-                    obj.id().expect("actor should have id property"),
+                    obj.id().expect("actor should have id property").to_owned(),
                 ));
             }
         }

@@ -17,25 +17,25 @@ enum Envelope {
 
 pub(crate) fn to_bytes(object: impl Into<Value>) -> Result<Vec<u8>> {
     let value = object.into();
-    Ok(minicbor::to_vec(&Envelope::V1(value.into())).context("unable to serialize payload")?)
+    minicbor::to_vec(Envelope::V1(value.into())).context("unable to serialize payload")
 }
-pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Object> {
+pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Object<'static>> {
     let Envelope::V1(value) = minicbor::decode(bytes).context("unable to deserialize payload")?;
     Ok(Object::from(Value::from(value)))
 }
 
-impl<C> Encode<C> for Object {
+impl<C> Encode<C> for Object<'_> {
     fn encode<W: minicbor::encode::Write>(
         &self,
         e: &mut minicbor::Encoder<W>,
         ctx: &mut C,
     ) -> std::result::Result<(), minicbor::encode::Error<W::Error>> {
-        let node_value: NodeValue = self.as_ref().clone().into();
+        let node_value: NodeValue = self.to_value().into();
         node_value.encode(e, ctx)
     }
 }
 
-impl<'b, C> Decode<'b, C> for Object {
+impl<'b, C> Decode<'b, C> for Object<'static> {
     fn decode(
         d: &mut minicbor::Decoder<'b>,
         ctx: &mut C,
@@ -78,7 +78,7 @@ impl<'b, C> Decode<'b, C> for Symbol {
         match d.datatype()? {
             Type::U8 | Type::U16 | Type::U32 | Type::U64 => Ok(Symbol::SymbolId(d.decode()?)),
             Type::String => Ok(Symbol::Text(d.decode()?)),
-            ty @ _ => Err(minicbor::decode::Error::type_mismatch(ty)),
+            ty => Err(minicbor::decode::Error::type_mismatch(ty)),
         }
     }
 }
@@ -159,7 +159,7 @@ impl<'b, C> Decode<'b, C> for NodeValue {
                 }
                 Ok(NodeValue::Object(items))
             }
-            ty @ _ => Err(minicbor::decode::Error::type_mismatch(ty)),
+            ty => Err(minicbor::decode::Error::type_mismatch(ty)),
         }
     }
 }

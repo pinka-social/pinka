@@ -25,23 +25,22 @@ impl ContextIndex {
         })
     }
     pub(crate) fn insert(&self, b: &mut Batch, iri: &str, obj_key: ObjectKey) -> Result<()> {
-        self.ctx_index
-            .insert(b, IdObjIndexKey::new(&iri, obj_key))?;
+        self.ctx_index.insert(b, IdObjIndexKey::new(iri, obj_key))?;
         Ok(())
     }
     pub(crate) fn insert_likes(&self, b: &mut Batch, iri: &str, obj_key: ObjectKey) -> Result<()> {
         self.likes_index
-            .insert(b, IdObjIndexKey::new(&iri, obj_key))?;
+            .insert(b, IdObjIndexKey::new(iri, obj_key))?;
         Ok(())
     }
     pub(crate) fn remove_likes(&self, b: &mut Batch, iri: &str, obj_key: ObjectKey) -> Result<()> {
         self.likes_index
-            .remove(b, IdObjIndexKey::new(&iri, obj_key))?;
+            .remove(b, IdObjIndexKey::new(iri, obj_key))?;
         Ok(())
     }
     pub(crate) fn insert_shares(&self, b: &mut Batch, iri: &str, obj_key: ObjectKey) -> Result<()> {
         self.shares_index
-            .insert(b, IdObjIndexKey::new(&iri, obj_key))?;
+            .insert(b, IdObjIndexKey::new(iri, obj_key))?;
         Ok(())
     }
     pub(crate) fn find_activity_by_context(

@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use fjall::{Keyspace, PersistMode};
 use minicbor::{Decode, Encode};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
-use serde_json::Value;
 use tokio::task::block_in_place;
 use tracing::{info, warn};
 
@@ -10,7 +9,7 @@ use crate::worker::raft::{
     get_raft_applied, ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg,
 };
 
-use super::model::{Actor as AsActor, Create, JsonLdValue, Object};
+use super::model::{Actor as AsActor, Create, Object};
 use super::repo::{ContextIndex, OutboxIndex};
 use super::{IriIndex, ObjectKey, ObjectRepo, UserIndex};
 
@@ -67,7 +66,7 @@ impl Actor for ActivityPubMachine {
 #[derive(Debug, Encode, Decode)]
 pub(crate) enum ActivityPubCommand {
     #[n(0)]
-    UpdateUser(#[n(0)] String, #[n(1)] Object),
+    UpdateUser(#[n(0)] String, #[n(1)] Object<'static>),
     /// Client to Server - Create Activity
     #[n(1)]
     C2sCreate(#[n(0)] C2sCommand),
@@ -98,7 +97,7 @@ pub(crate) struct C2sCommand {
     #[n(2)]
     pub(crate) obj_key: ObjectKey,
     #[n(3)]
-    pub(crate) object: Object,
+    pub(crate) object: Object<'static>,
 }
 
 #[derive(Debug, Encode, Decode)]
@@ -108,16 +107,16 @@ pub(crate) struct S2sCommand {
     #[n(1)]
     pub(crate) obj_key: ObjectKey,
     #[n(2)]
-    pub(crate) object: Object,
+    pub(crate) object: Object<'static>,
 }
 
 impl ActivityPubCommand {
     fn into_bytes(self) -> Result<Vec<u8>> {
-        Ok(minicbor::to_vec(&self).context("unable to serialize apub command")?)
+        minicbor::to_vec(&self).context("unable to serialize apub command")
     }
 
     fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        Ok(minicbor::decode(bytes).context("unable to deserialize apub command")?)
+        minicbor::decode(bytes).context("unable to deserialize apub command")
     }
 }
 
@@ -166,8 +165,8 @@ impl State {
 
         Ok(ClientResult::ok())
     }
-    async fn handle_new_user(&mut self, uid: String, object: Object) -> Result<()> {
-        let user = AsActor::try_from(object)?;
+    async fn handle_new_user(&mut self, uid: String, object: Object<'_>) -> Result<()> {
+        let user = AsActor::from(object);
 
         block_in_place(|| -> Result<()> {
             let mut b = self.keyspace.batch();
@@ -185,10 +184,8 @@ impl State {
             uid,
             act_key,
             obj_key,
-            object: node,
+            object,
         } = cmd;
-        let value = Value::from(node);
-        let object = Object::try_from(value)?;
         let create = Create::try_from(object)?;
 
         block_in_place(|| -> Result<()> {
@@ -204,19 +201,15 @@ impl State {
     }
     async fn handle_s2s_create(&mut self, cmd: S2sCommand) -> Result<()> {
         let S2sCommand {
-            obj_key,
-            object: node,
-            ..
+            obj_key, object, ..
         } = cmd;
-        let value = Value::from(node);
-        if value.has_props(&["context"]) {
+        if object.has_props(&["context"]) {
             // currently we only care activities mentioning our object
             // TODO verify context
-            let Some(Value::String(iri)) = value.get("context") else {
+            let Some(iri) = object.get_str("context") else {
                 return Ok(());
             };
             let iri = iri.to_string();
-            let object = Object::try_from(value)?;
             // TODO let create = Create::try_from(object)?;
             // TODO save the activity and the object
 
@@ -240,13 +233,10 @@ impl State {
     }
     async fn handle_s2s_like(&mut self, cmd: S2sCommand) -> Result<()> {
         let S2sCommand {
-            obj_key,
-            object: node,
-            ..
+            obj_key, object, ..
         } = cmd;
-        let value = Value::from(node);
-        if value.has_props(&["object"]) {
-            let Some(iri) = value.object_iri() else {
+        if object.has_props(&["object"]) {
+            let Some(iri) = object.get_node_iri("object") else {
                 return Ok(());
             };
             let iri = iri.to_string();
@@ -255,11 +245,11 @@ impl State {
                 let mut b = self.keyspace.batch();
                 let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
                 let ctx_index = ContextIndex::new(self.keyspace.clone())?;
-                if let Some(activity_iri) = value.id() {
+                if let Some(activity_iri) = object.id() {
                     let iri_index = IriIndex::new(self.keyspace.clone())?;
                     iri_index.insert(&mut b, activity_iri, obj_key)?;
                 }
-                obj_repo.insert(&mut b, obj_key, value)?;
+                obj_repo.insert(&mut b, obj_key, object)?;
                 ctx_index.insert_likes(&mut b, &iri, obj_key)?;
                 b.commit()?;
                 self.keyspace.persist(PersistMode::SyncAll)?;
@@ -276,19 +266,18 @@ impl State {
         let S2sCommand {
             uid,
             obj_key,
-            object: node,
+            object,
         } = cmd;
-        let value = Value::from(node);
-        if value.has_props(&["object"]) {
+        if object.has_props(&["object"]) {
             block_in_place(|| -> Result<()> {
                 let mut b = self.keyspace.batch();
                 let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
                 let user_index = UserIndex::new(self.keyspace.clone())?;
-                if let Some(activity_iri) = value.id() {
+                if let Some(activity_iri) = object.id() {
                     let iri_index = IriIndex::new(self.keyspace.clone())?;
                     iri_index.insert(&mut b, activity_iri, obj_key)?;
                 }
-                obj_repo.insert(&mut b, obj_key, value)?;
+                obj_repo.insert(&mut b, obj_key, object)?;
                 user_index.insert_follower(&mut b, &uid, obj_key)?;
                 b.commit()?;
                 self.keyspace.persist(PersistMode::SyncAll)?;
@@ -305,44 +294,31 @@ impl State {
     /// * <https://www.w3.org/wiki/ActivityPub/Primer/Referring_to_activities>
     async fn handle_s2s_undo(&mut self, cmd: S2sCommand) -> Result<()> {
         let S2sCommand {
-            uid, object: node, ..
+            uid, object: undo, ..
         } = cmd;
         block_in_place(|| {
             let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
             let iri_index = IriIndex::new(self.keyspace.clone())?;
             // We can undo Follow and Like
-            let value = Value::from(node);
             // FIXME abstraction
             // Find the obj_key of the activity we should undo
             let mut undo_obj_key = None;
-            if let Some(object) = value.get("object") {
-                if let Value::Object(map) = object {
-                    if let Some(Value::String(iri)) = map.get("id") {
-                        // We have an ID, but do we know this ID?
-                        if let Some(slice) = iri_index.find_one(&iri)? {
-                            undo_obj_key = Some(ObjectKey::try_from(slice.as_ref())?);
-                        } else {
-                            warn!(target: "apub", "unknown activity id {iri} mentioned in Undo");
-                        }
-                    }
-                    if undo_obj_key.is_none() {
-                        // The object does not have a known IRI.
-                        // TODO do our best to find the most recent activity from the actor
-                    }
+            if let Some(iri) = undo.get_node_iri("object") {
+                // We have an ID, but do we know this ID?
+                if let Some(slice) = iri_index.find_one(iri)? {
+                    undo_obj_key = Some(ObjectKey::try_from(slice.as_ref())?);
+                } else {
+                    warn!(target: "apub", "unknown activity id {iri} mentioned in Undo");
                 }
-                if let Value::String(iri) = object {
-                    // We have an ID, but do we know this ID?
-                    if let Some(slice) = iri_index.find_one(&iri)? {
-                        undo_obj_key = Some(ObjectKey::try_from(slice.as_ref())?);
-                    } else {
-                        warn!(target: "apub", "unknown activity id {iri} mentioned in Undo");
-                    }
+                if undo_obj_key.is_none() {
+                    // The object does not have a known IRI.
+                    // TODO do our best to find the most recent activity from the actor
                 }
             }
             if let Some(undo_obj_key) = undo_obj_key {
                 if let Some(activity) = obj_repo.find_one(undo_obj_key)? {
-                    if let Some(object_iri) = activity.as_ref().object_iri() {
-                        if activity.as_ref().type_is("Like") {
+                    if let Some(object_iri) = activity.get_node_iri("object") {
+                        if activity.type_is("Like") {
                             // Undo Like
                             let ctx_index = ContextIndex::new(self.keyspace.clone())?;
                             let mut b = self.keyspace.batch();
@@ -350,7 +326,7 @@ impl State {
                             b.commit()?;
                             self.keyspace.persist(PersistMode::SyncAll)?;
                         }
-                        if activity.as_ref().type_is("Follow") {
+                        if activity.type_is("Follow") {
                             // Undo Follow
                             let user_index = UserIndex::new(self.keyspace.clone())?;
                             let mut b = self.keyspace.batch();
@@ -367,9 +343,8 @@ impl State {
         })
     }
     async fn handle_s2s_update(&mut self, cmd: S2sCommand) -> Result<()> {
-        let S2sCommand { object: node, .. } = cmd;
-        let value = Value::from(node);
-        if value.has_props(&["object"]) {
+        let S2sCommand { object: update, .. } = cmd;
+        if update.has_props(&["object"]) {
             // let Some(iri) = value.object_iri() else {
             //     return Ok(());
             // };
@@ -392,12 +367,11 @@ impl State {
     async fn handle_s2s_announce(&mut self, cmd: S2sCommand) -> Result<()> {
         let S2sCommand {
             obj_key,
-            object: node,
+            object: announce,
             ..
         } = cmd;
-        let value = Value::from(node);
-        if value.has_props(&["object"]) {
-            let Some(iri) = value.object_iri() else {
+        if announce.has_props(&["object"]) {
+            let Some(iri) = announce.get_node_iri("object") else {
                 return Ok(());
             };
             let iri = iri.to_string();
@@ -406,7 +380,7 @@ impl State {
                 let mut b = self.keyspace.batch();
                 let obj_repo = ObjectRepo::new(self.keyspace.clone())?;
                 let ctx_index = ContextIndex::new(self.keyspace.clone())?;
-                obj_repo.insert(&mut b, obj_key, value)?;
+                obj_repo.insert(&mut b, obj_key, announce)?;
                 ctx_index.insert_shares(&mut b, &iri, obj_key)?;
                 b.commit()?;
                 self.keyspace.persist(PersistMode::SyncAll)?;

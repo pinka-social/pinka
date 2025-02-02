@@ -67,9 +67,9 @@ impl<'b, C> Decode<'b, C> for ObjectKey {
         let bytes = d.bytes()?;
         let uuid = bytes
             .try_into()
-            .map_err(|e| minicbor::decode::Error::custom(e))
+            .map_err(minicbor::decode::Error::custom)
             .map(Uuid::from_bytes)
-            .map_err(|e| minicbor::decode::Error::custom(e))?;
+            .map_err(minicbor::decode::Error::custom)?;
         Ok(ObjectKey(uuid))
     }
 }
@@ -104,7 +104,7 @@ impl IdObjIndexKey {
 
 impl From<IdObjIndexKey> for UserKey {
     fn from(value: IdObjIndexKey) -> Self {
-        value.0.into()
+        value.0
     }
 }
 
