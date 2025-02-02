@@ -1,14 +1,12 @@
-mod iri;
-
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{Method, StatusCode, Uri};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::task::block_in_place;
 use tracing::info;
@@ -16,7 +14,7 @@ use uuid::Uuid;
 
 use crate::activity_pub::machine::{ActivityPubCommand, C2sCommand, S2sCommand};
 use crate::activity_pub::model::{Actor, Collection, Create, JsonLdValue, Object};
-use crate::activity_pub::{ObjectKey, ObjectRepo, OutboxIndex, UserIndex};
+use crate::activity_pub::{ContextIndex, IriIndex, ObjectKey, ObjectRepo, OutboxIndex, UserIndex};
 use crate::config::RuntimeConfig;
 use crate::worker::raft::{get_raft_local_client, LogEntryValue, RaftClientMsg};
 
@@ -56,11 +54,13 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
         return Ok(());
     }
     let app = Router::new()
-        .route("/as/objects/{obj_key}", get(get_object))
         .route("/users/{id}", get(get_actor).post(post_actor))
         .route("/users/{id}/outbox", get(get_outbox).post(post_outbox))
         .route("/users/{id}/inbox", post(post_inbox))
         .route("/users/{id}/followers", get(get_followers))
+        .route("/as/objects/{obj_key}", get(get_object_by_id))
+        .route("/as/objects/{obj_key}/{prop}", get(get_object_likes_shares))
+        .fallback(get_object_by_iri)
         .with_state(config.clone());
     let listener = TcpListener::bind(format!("0.0.0.0:{}", config.server.http.port)).await?;
     axum::serve(listener, app).await?;
@@ -82,23 +82,98 @@ async fn get_actor(
     })
 }
 
-async fn get_object(
+async fn get_object_by_id(
     State(config): State<RuntimeConfig>,
     Path(obj_key): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
     block_in_place(|| {
-        let obj_repo = ObjectRepo::new(config.keyspace.clone()).map_err(ise)?;
         let obj_key = ObjectKey::from_str(&obj_key)
             .context("invalid UUID")
             .map_err(invalid)?;
-        if let Some(object) = obj_repo.find_one(obj_key).map_err(ise)? {
-            // let iri = format!(
-            //     "{}/as/objects/{}",
-            //     config.init.activity_pub.base_url, obj_key
-            // );
-            return Ok(Json(object.into()));
-        }
-        Err(StatusCode::NOT_FOUND)
+        let iri = format!("{}/as/objects/{obj_key}", config.init.activity_pub.base_url);
+        blocking_get_object_by_iri(&config, &iri, obj_key)
+    })
+}
+
+async fn get_object_by_iri(
+    State(config): State<RuntimeConfig>,
+    method: Method,
+    uri: Uri,
+) -> Result<Json<Value>, StatusCode> {
+    if !matches!(method, Method::GET) {
+        return Err(StatusCode::METHOD_NOT_ALLOWED);
+    }
+    block_in_place(|| {
+        let iri_index = IriIndex::new(config.keyspace.clone()).map_err(ise)?;
+        let iri = format!("{}{}", config.init.activity_pub.base_url, uri.path());
+        let obj_key = iri_index
+            .find_one(&iri)
+            .map_err(ise)?
+            .context("unknown IRI")
+            .map_err(invalid)?;
+        let obj_key = ObjectKey::try_from(obj_key.as_ref())
+            .context("invalid UUID")
+            .map_err(invalid)?;
+        blocking_get_object_by_iri(&config, &iri, obj_key)
+    })
+}
+
+fn blocking_get_object_by_iri(
+    config: &RuntimeConfig,
+    iri: &str,
+    obj_key: ObjectKey,
+) -> Result<Json<Value>, StatusCode> {
+    let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
+    let obj_repo = ObjectRepo::new(config.keyspace.clone()).map_err(ise)?;
+    info!(iri, "loading object");
+    if let Some(mut object) = obj_repo.find_one(obj_key).map_err(ise)? {
+        let likes = ctx_index.count_likes(&iri);
+        let shares = ctx_index.count_shares(&iri);
+        object.augment_with(
+            "likes",
+            json!({
+                "id": format!("{}/as/objects/{obj_key}/likes", config.init.activity_pub.base_url),
+                "type": "Collection",
+                "totalItems": likes
+            }),
+        );
+        object.augment_with(
+            "shares",
+            json!({
+                "id": format!("{}/as/objects/{obj_key}/shares", config.init.activity_pub.base_url),
+                "type": "Collection",
+                "totalItems": shares
+            }),
+        );
+        return Ok(Json(object.into()));
+    }
+    Err(StatusCode::NOT_FOUND)
+}
+
+async fn get_object_likes_shares(
+    State(config): State<RuntimeConfig>,
+    Path((obj_key, prop)): Path<(String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    if prop != "likes" && prop != "shares" {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    block_in_place(|| {
+        let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
+        let obj_key = ObjectKey::from_str(&obj_key)
+            .context("invalid UUID")
+            .map_err(invalid)?;
+        let iri = format!("{}/as/objects/{obj_key}", config.init.activity_pub.base_url);
+        let count = match prop.as_str() {
+            "likes" => ctx_index.count_likes(&iri),
+            "shares" => ctx_index.count_shares(&iri),
+            _ => unreachable!(),
+        };
+        return Ok(Json(json!({
+            "@context": "https://www.w3.org/ns/activitystreams",
+            "id": format!("{}/as/objects/{obj_key}/{prop}", config.init.activity_pub.base_url),
+            "type": "Collection",
+            "totalItems": count
+        })));
     })
 }
 

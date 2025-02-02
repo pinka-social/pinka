@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use fjall::{Batch, Keyspace, PartitionCreateOptions};
 
-use crate::activity_pub::model::{BaseObject, Create, JsonLdValue, Object};
+use crate::activity_pub::model::{Create, Object};
 
 use super::iri_index::IriIndex;
 use super::xindex::IdObjIndex;

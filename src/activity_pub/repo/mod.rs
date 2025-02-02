@@ -7,6 +7,7 @@ mod xindex;
 mod xkey;
 
 pub(crate) use context_index::ContextIndex;
+pub(crate) use iri_index::IriIndex;
 pub(crate) use object_repo::ObjectRepo;
 pub(crate) use outbox_index::OutboxIndex;
 pub(crate) use user_index::UserIndex;

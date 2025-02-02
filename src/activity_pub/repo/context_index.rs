@@ -59,6 +59,9 @@ impl ContextIndex {
     ) -> Result<Vec<UserKey>> {
         self.ctx_index.find_all(iri, before, after, first, last)
     }
+    pub(crate) fn count_likes(&self, iri: &str) -> u64 {
+        self.likes_index.count(iri)
+    }
     pub(crate) fn find_likes(
         &self,
         iri: &str,
@@ -68,6 +71,9 @@ impl ContextIndex {
         last: Option<u64>,
     ) -> Result<Vec<UserKey>> {
         self.likes_index.find_all(iri, before, after, first, last)
+    }
+    pub(crate) fn count_shares(&self, iri: &str) -> u64 {
+        self.shares_index.count(iri)
     }
     pub(crate) fn find_shares(
         &self,

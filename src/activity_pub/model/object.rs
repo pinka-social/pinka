@@ -43,6 +43,13 @@ impl Object {
         }
         self
     }
+    pub(crate) fn augment_with(&mut self, property: &str, value: Value) -> &mut Self {
+        let obj_map = self.0.as_object_mut().unwrap();
+        if !obj_map.contains_key(property) {
+            obj_map.insert(property.to_string(), value);
+        }
+        self
+    }
 }
 
 pub(crate) trait BaseObject {
