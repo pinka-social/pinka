@@ -1,6 +1,6 @@
 //! A simple persited queue
 
-use std::time::Instant;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use fjall::{Keyspace, Partition, PersistMode};
@@ -40,20 +40,22 @@ pub(super) struct SimpleQueue {
     keyspace: Keyspace,
     messages: Partition,
     visibility: Partition,
-    epoch: Instant,
 }
 
 impl SimpleQueue {
     pub(super) fn new(keyspace: Keyspace) -> Result<SimpleQueue> {
         let messages = keyspace.open_partition("sq_messages", Default::default())?;
         let visibility = keyspace.open_partition("sq_visibility", Default::default())?;
-        let epoch = Instant::now();
         Ok(SimpleQueue {
             keyspace,
             messages,
             visibility,
-            epoch,
         })
+    }
+    pub(super) fn is_empty(&self) -> Result<bool> {
+        self.messages
+            .is_empty()
+            .context("unable to read from messages tree")
     }
     pub(super) fn send_message(&self, key: Bytes, body: &[u8]) -> Result<()> {
         let uuid = key;
@@ -77,7 +79,11 @@ impl SimpleQueue {
         new_receipt_handle: Bytes,
         visibility_timeout: u64,
     ) -> Result<Option<ReceiveResult>> {
-        let now = self.epoch.elapsed().as_secs();
+        // Use SystemTime to track visibility timeout so it is consistent across
+        // system restart or crashes. Each instance might have slightly
+        // different time drift, but this is fine. Messages will eventually
+        // become visible.
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
         for item in self.messages.iter() {
             let (key, value_bytes) = item?;
