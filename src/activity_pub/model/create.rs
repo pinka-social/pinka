@@ -32,12 +32,11 @@ impl TryFrom<Object<'_>> for Create<'static> {
         });
 
         let map = create.as_object_mut().unwrap();
-        for prop in ["to", "bto", "cc", "bcc", "published"] {
-            if let Some(v) = object.get_string_array(prop) {
+        for prop in ["to", "bto", "cc", "bcc", "audience", "published"] {
+            if let Some(v) = object.get_value(prop) {
                 map.insert(prop.to_string(), v);
             }
         }
-        // TODO handle audience?
         map.insert("object".to_string(), object.into());
 
         Ok(Create(Object::from(create)))

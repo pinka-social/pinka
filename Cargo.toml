@@ -18,6 +18,7 @@ minicbor = { version = "0.25.1", features = ["derive", "alloc"] }
 ractor = { version = "0.14.6", features = ["cluster"] }
 ractor_cluster = { version = "0.14.6" }
 rand = "0.8.5"
+reqwest = { version = "0.12.12", features = ["gzip", "json"] }
 rustls-pki-types = { version = "1.10.1", features = ["std"] }
 rustls-platform-verifier = "0.5.0"
 serde = { version = "1.0", features = ["derive"] }

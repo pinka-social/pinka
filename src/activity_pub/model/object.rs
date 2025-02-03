@@ -57,13 +57,16 @@ impl Object<'_> {
     pub(crate) fn get_str(&self, prop: &str) -> Option<&str> {
         self.0.get(prop).and_then(Value::as_str)
     }
-    pub(crate) fn get_string_array(&self, prop: &str) -> Option<Value> {
+    pub(crate) fn get_value(&self, prop: &str) -> Option<Value> {
+        self.0.get(prop).cloned()
+    }
+    pub(crate) fn get_str_array(&self, prop: &str) -> Option<Vec<&str>> {
         if let Some(s) = self.get_str(prop) {
-            return Some(Value::String(s.into()));
+            return Some(vec![s]);
         }
         if let Some(Value::Array(array)) = self.0.get(prop) {
             if array.iter().all(|v| v.is_string()) {
-                return Some(Value::Array(array.clone()));
+                return Some(array.iter().map(|v| v.as_str().unwrap()).collect());
             }
         }
         None
@@ -168,6 +171,12 @@ impl<'a> From<&'a Value> for Object<'a> {
 impl From<Object<'_>> for Value {
     fn from(value: Object) -> Self {
         value.0.into_owned()
+    }
+}
+
+impl AsRef<Value> for Object<'_> {
+    fn as_ref(&self) -> &Value {
+        &self.0
     }
 }
 

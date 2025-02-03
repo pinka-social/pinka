@@ -2,6 +2,7 @@ use ractor::{Actor, ActorProcessingErr, ActorRef, SupervisionEvent};
 use ractor_cluster::RactorMessage;
 use tracing::info;
 
+use crate::activity_pub::delivery::{DeliveryWorker, DeliveryWorkerInit, DeliveryWorkerMsg};
 use crate::activity_pub::machine::{ActivityPubMachine, ActivityPubMachineInit};
 use crate::config::{RuntimeConfig, ServerConfig};
 use crate::flags::Serve;
@@ -59,6 +60,16 @@ impl Actor for Supervisor {
             ActivityPubMachine,
             ActivityPubMachineInit {
                 keyspace: config.keyspace.clone(),
+            },
+            myself.get_cell(),
+        )
+        .await?;
+
+        Actor::spawn_linked(
+            None,
+            DeliveryWorker,
+            DeliveryWorkerInit {
+                config: config.clone(),
             },
             myself.get_cell(),
         )
@@ -130,6 +141,21 @@ impl Actor for Supervisor {
                         ActivityPubMachine,
                         ActivityPubMachineInit {
                             keyspace: state.config.keyspace.clone(),
+                        },
+                        myself.get_cell(),
+                    )
+                    .await?;
+                }
+                if matches!(
+                    actor_cell.is_message_type_of::<DeliveryWorkerMsg>(),
+                    Some(true)
+                ) {
+                    info!(target: "supervision", error, "delivery worker crashed, restarting...");
+                    Actor::spawn_linked(
+                        None,
+                        DeliveryWorker,
+                        DeliveryWorkerInit {
+                            config: state.config.clone(),
                         },
                         myself.get_cell(),
                     )

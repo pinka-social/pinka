@@ -30,14 +30,14 @@ impl ObjectRepo {
         b.insert(&self.objects, key, bytes);
         Ok(())
     }
-    pub(crate) fn find_one(&self, key: impl AsRef<[u8]>) -> Result<Option<Object>> {
+    pub(crate) fn find_one(&self, key: impl AsRef<[u8]>) -> Result<Option<Object<'static>>> {
         if let Some(bytes) = self.objects.get(key)? {
             let object = object_serde::from_bytes(&bytes)?;
             return Ok(Some(object));
         }
         Ok(None)
     }
-    pub(crate) fn all(&self) -> Result<Vec<Object>> {
+    pub(crate) fn all(&self) -> Result<Vec<Object<'static>>> {
         let mut result = vec![];
         for bytes in self.objects.values() {
             let object = object_serde::from_bytes(&bytes?)?;
