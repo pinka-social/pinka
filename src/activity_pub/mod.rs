@@ -1,5 +1,6 @@
 #[macro_use]
 mod object_serde;
+mod mailman;
 mod repo;
 mod simple_queue;
 

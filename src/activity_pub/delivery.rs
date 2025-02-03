@@ -1,16 +1,18 @@
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::Result;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
-use tokio::task::block_in_place;
-use tracing::{info, warn};
+use tokio::task::{block_in_place, spawn_blocking};
+use tracing::warn;
 
 use crate::activity_pub::uuidgen;
 use crate::worker::raft::{get_raft_local_client, ClientResult, LogEntryValue, RaftClientMsg};
 use crate::RuntimeConfig;
 
 use super::machine::ActivityPubCommand;
+use super::mailman::Mailman;
+use super::model::Object;
 use super::simple_queue::{ReceiveResult, SimpleQueue};
 use super::{IriIndex, ObjectRepo};
 
@@ -29,6 +31,7 @@ pub(crate) struct DeliveryWorkerState {
     iri_index: IriIndex,
     obj_repo: ObjectRepo,
     queue: SimpleQueue,
+    mailman: Mailman,
 }
 
 impl Actor for DeliveryWorker {
@@ -46,11 +49,13 @@ impl Actor for DeliveryWorker {
             let iri_index = IriIndex::new(config.keyspace.clone())?;
             let obj_repo = ObjectRepo::new(config.keyspace.clone())?;
             let queue = SimpleQueue::new(config.keyspace.clone())?;
+            let mailman = Mailman::new();
 
             Ok(DeliveryWorkerState {
                 iri_index,
                 obj_repo,
                 queue,
+                mailman,
             })
         })
     }
@@ -113,9 +118,44 @@ impl DeliveryWorkerState {
             return Ok(false);
         }
         let result = ReceiveResult::from_bytes(&bytes)?;
+        let message = result.message;
+        let obj_key = message.body;
+        let obj_repo = self.obj_repo.clone();
+        if let Some(object) = spawn_blocking(move || obj_repo.find_one(obj_key)).await?? {
+            // info!(target: "apub", ?result, "simulate delivery");
 
-        info!(target: "apub", ?result, "simulate delivery");
+            // Collect recipients
+            let mut recipients = vec![];
+            for target in ["to", "bto", "cc", "bcc", "audience"] {
+                if let Some(iri_array) = object.get_str_array(&target) {
+                    iri_array.iter().for_each(|&iri| recipients.push(iri));
+                    continue;
+                }
+                if let Some(iri) = object.get_node_iri(&target) {
+                    recipients.push(iri);
+                }
+            }
+            // Skip public addressing
+            // TODO
 
+            // De-duplicate the final recipient list
+            recipients.sort();
+            recipients.dedup();
+
+            // Remove self and attributedTo and origin actor
+            // TODO
+
+            // Deliver
+            // TODO JoinSet
+            for iri in recipients {
+                let value = self.mailman.fetch(iri).await?;
+                let actor = Object::from(value);
+                if let Some(inbox) = actor.get_str("inbox") {
+                    // TODO error handling
+                    self.mailman.post(inbox, &object).await?;
+                }
+            }
+        }
         // Ack
         let command = ActivityPubCommand::AckDelivery(result.key, receipt_handle);
         let _ = ractor::call!(

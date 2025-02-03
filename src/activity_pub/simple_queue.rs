@@ -11,11 +11,11 @@ type Bytes = [u8; 16];
 #[derive(Debug, Encode, Decode)]
 pub(super) struct QueueMessage {
     #[n(0)]
-    body: Vec<u8>,
+    pub(super) body: Vec<u8>,
     #[n(1)]
-    receipt_handle: Bytes,
+    pub(super) receipt_handle: Bytes,
     #[n(2)]
-    approximate_receive_count: u64,
+    pub(super) approximate_receive_count: u64,
 }
 
 #[derive(Debug, Encode, Decode)]
@@ -74,6 +74,8 @@ impl SimpleQueue {
 
         Ok(())
     }
+    // TODO if a readonly replica crashes and restart, the replayed message may
+    // no longer be deleted.
     pub(super) fn receive_message(
         &self,
         new_receipt_handle: Bytes,

@@ -37,7 +37,9 @@
 - [ ] ActivityPub endpoints
     - [ ] Collections
         - [x] Outbox
+            - [ ] bto, bcc masking
         - [x] Inbox
+            - [ ] Deduplication
         - [x] Followers
         - [ ] Following
         - [ ] Liked
@@ -56,7 +58,6 @@
         - [ ] Announce Activity
         - [ ] Block Activity
         - [ ] Undo Activity
-        - [ ] Delivery
     - [ ] Server to Server Interactions
         - [ ] Create Activity
         - [ ] Update Activity
@@ -71,5 +72,8 @@
         - [ ] Block Activity
         - [x] Undo Activity
         - [ ] Delivery
+            - [ ] Retry
+            - [ ] Forwarding from Inbox
+            - [ ] Shared Inbox Delivery
 - [ ] RESTful endpoints for webui
 - [ ] Webmention
