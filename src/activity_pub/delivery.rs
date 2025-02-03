@@ -105,7 +105,7 @@ impl DeliveryWorkerState {
         // Pull new work
         let raft_client = get_raft_local_client()?;
         let receipt_handle = uuidgen();
-        let command = ActivityPubCommand::ReceiveDelivery(receipt_handle, 30);
+        let command = ActivityPubCommand::ReceiveDelivery(receipt_handle, SimpleQueue::now(), 30);
         let client_result = ractor::call!(
             raft_client,
             RaftClientMsg::ClientRequest,

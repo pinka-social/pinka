@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use fjall::{Keyspace, Partition, PersistMode};
 use minicbor::{Decode, Encode};
+use tracing::debug;
 
 type Bytes = [u8; 16];
 
@@ -52,13 +53,19 @@ impl SimpleQueue {
             visibility,
         })
     }
+
+    pub(super) fn now() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time must be after unix epoch")
+            .as_secs()
+    }
     pub(super) fn is_empty(&self) -> Result<bool> {
         self.messages
             .is_empty()
             .context("unable to read from messages tree")
     }
     pub(super) fn send_message(&self, key: Bytes, body: &[u8]) -> Result<()> {
-        let uuid = key;
         let receipt_handle = key;
 
         let message = QueueMessage {
@@ -67,26 +74,25 @@ impl SimpleQueue {
             approximate_receive_count: 0,
         };
 
+        debug!(target: "sq", ?key, ?message, "send message");
+
         let bytes = minicbor::to_vec(message)?;
 
-        self.messages.insert(uuid, bytes)?;
+        self.messages.insert(key, bytes)?;
         self.keyspace.persist(PersistMode::SyncAll)?;
 
         Ok(())
     }
-    // TODO if a readonly replica crashes and restart, the replayed message may
-    // no longer be deleted.
+    // Use client side generated `now` to track visibility timeout so it is
+    // consistent across system restart or crashes. Each instance might have
+    // slightly different time drift, but messages will eventually become
+    // visible.
     pub(super) fn receive_message(
         &self,
         new_receipt_handle: Bytes,
+        now: u64,
         visibility_timeout: u64,
     ) -> Result<Option<ReceiveResult>> {
-        // Use SystemTime to track visibility timeout so it is consistent across
-        // system restart or crashes. Each instance might have slightly
-        // different time drift, but this is fine. Messages will eventually
-        // become visible.
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-
         for item in self.messages.iter() {
             let (key, value_bytes) = item?;
 
@@ -113,6 +119,8 @@ impl SimpleQueue {
             batch.commit()?;
             self.keyspace.persist(PersistMode::SyncAll)?;
 
+            debug!(target: "sq", ?key, ?message, "received message");
+
             return Ok(Some(ReceiveResult {
                 key: key.as_ref().try_into()?,
                 message,
@@ -127,6 +135,7 @@ impl SimpleQueue {
         if let Some(message) = self.messages.get(&key)? {
             let message: QueueMessage = minicbor::decode(&message)?;
             if message.receipt_handle == receipt_handle {
+                debug!(target: "sq", ?key, ?message, "delete message");
                 batch.remove(&self.messages, key.clone());
                 batch.remove(&self.visibility, key.clone());
             } else {
@@ -159,14 +168,14 @@ mod tests {
         let queue = SimpleQueue::new(keyspace)?;
 
         // Test empty queue
-        assert!(queue.receive_message(uuidgen(), 30)?.is_none());
+        assert!(queue.receive_message(uuidgen(), 1, 30)?.is_none());
 
         // Send message
         queue.send_message(uuidgen(), b"test1")?;
 
         // Receive message
         let handle = uuidgen();
-        let ReceiveResult { key, message: msg } = queue.receive_message(handle, 30)?.unwrap();
+        let ReceiveResult { key, message: msg } = queue.receive_message(handle, 2, 30)?.unwrap();
         assert_eq!(msg.body, b"test1");
         assert_eq!(handle, msg.receipt_handle);
 
@@ -174,7 +183,7 @@ mod tests {
         queue.delete_message(key, handle)?;
 
         // Verify deletion
-        assert!(queue.receive_message(uuidgen(), 30)?.is_none());
+        assert!(queue.receive_message(uuidgen(), 3, 30)?.is_none());
         Ok(())
     }
 
@@ -191,20 +200,18 @@ mod tests {
         let ReceiveResult {
             key: key1,
             message: msg1,
-        } = queue.receive_message(handle1, 1)?.unwrap();
+        } = queue.receive_message(handle1, 1, 1)?.unwrap();
 
         // Immediate retry should find nothing
-        assert!(queue.receive_message(uuidgen(), 1)?.is_none());
+        assert!(queue.receive_message(uuidgen(), 1, 1)?.is_none());
 
         // Wait longer than timeout
-        std::thread::sleep(std::time::Duration::from_secs(2));
-
         // Should receive again with new handle
         let handle2 = uuidgen();
         let ReceiveResult {
             key: key2,
             message: msg2,
-        } = queue.receive_message(handle2, 1)?.unwrap();
+        } = queue.receive_message(handle2, 10, 1)?.unwrap();
         assert_eq!(key1, key2);
         assert_eq!(msg1.body, msg2.body);
         assert_ne!(handle1, handle2);
@@ -224,12 +231,12 @@ mod tests {
         let ReceiveResult {
             key: key1,
             message: _,
-        } = queue.receive_message(handle1, 0)?.unwrap();
+        } = queue.receive_message(handle1, 1, 0)?.unwrap();
         let handle2 = uuidgen();
         let ReceiveResult {
             key: key2,
             message: _,
-        } = queue.receive_message(handle2, 0)?.unwrap();
+        } = queue.receive_message(handle2, 2, 0)?.unwrap();
 
         assert_eq!(key1, key2);
         assert_ne!(handle1, handle2);
@@ -264,8 +271,9 @@ mod tests {
         for _ in 0..5 {
             let q = queue.clone();
             handles.push(std::thread::spawn(move || {
-                while let Some(ReceiveResult { key, message }) =
-                    q.receive_message(uuidgen(), 30).unwrap()
+                while let Some(ReceiveResult { key, message }) = q
+                    .receive_message(uuidgen(), SimpleQueue::now(), 30)
+                    .unwrap()
                 {
                     q.delete_message(key, message.receipt_handle).unwrap();
                 }
@@ -278,7 +286,9 @@ mod tests {
         }
 
         // Verify all processed
-        assert!(queue.receive_message(uuidgen(), 30)?.is_none());
+        assert!(queue
+            .receive_message(uuidgen(), SimpleQueue::now(), 30)?
+            .is_none());
         Ok(())
     }
 }
