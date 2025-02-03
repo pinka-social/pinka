@@ -113,7 +113,7 @@ pub(crate) enum ActivityPubCommand {
     #[n(10)]
     QueueDelivery(#[n(0)] Bytes, #[n(1)] ObjectKey),
     #[n(11)]
-    ReceiveDelivery(#[n(0)] Bytes, #[n(1)] u64),
+    ReceiveDelivery(#[n(0)] Bytes, #[n(1)] u64, #[n(2)] u64),
     #[n(12)]
     AckDelivery(#[n(0)] Bytes, #[n(1)] Bytes),
 }
@@ -194,10 +194,10 @@ impl State {
             ActivityPubCommand::QueueDelivery(key, object_key) => {
                 block_in_place(|| self.queue.send_message(key, object_key.as_ref()))?;
             }
-            ActivityPubCommand::ReceiveDelivery(receipt_handle, visibility_timeout) => {
+            ActivityPubCommand::ReceiveDelivery(receipt_handle, now, visibility_timeout) => {
                 if let Some(res) = block_in_place(|| {
                     self.queue
-                        .receive_message(receipt_handle, visibility_timeout)
+                        .receive_message(receipt_handle, now, visibility_timeout)
                 })? {
                     return Ok(ClientResult::Ok(res.to_bytes()?));
                 }
