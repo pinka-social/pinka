@@ -15,7 +15,7 @@ pub(super) struct QueueMessage {
     #[n(1)]
     receipt_handle: Bytes,
     #[n(2)]
-    retry_count: u64,
+    approximate_receive_count: u64,
 }
 
 #[derive(Debug, Encode, Decode)]
@@ -64,7 +64,7 @@ impl SimpleQueue {
         let message = QueueMessage {
             body: body.into(),
             receipt_handle,
-            retry_count: 0,
+            approximate_receive_count: 0,
         };
 
         let bytes = minicbor::to_vec(message)?;
@@ -104,7 +104,7 @@ impl SimpleQueue {
             batch.insert(&self.visibility, key.clone(), new_visible_at.to_le_bytes());
 
             message.receipt_handle = new_receipt_handle;
-            message.retry_count += 1;
+            message.approximate_receive_count += 1;
             let bytes = minicbor::to_vec(&message)?;
             batch.insert(&self.messages, key.clone(), bytes);
 

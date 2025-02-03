@@ -1,17 +1,17 @@
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
 use tokio::task::block_in_place;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::activity_pub::uuidgen;
 use crate::worker::raft::{get_raft_local_client, ClientResult, LogEntryValue, RaftClientMsg};
 use crate::RuntimeConfig;
 
 use super::machine::ActivityPubCommand;
-use super::simple_queue::ReceiveResult;
+use super::simple_queue::{ReceiveResult, SimpleQueue};
 use super::{IriIndex, ObjectRepo};
 
 pub(crate) struct DeliveryWorker;
@@ -28,6 +28,7 @@ pub(crate) struct DeliveryWorkerInit {
 pub(crate) struct DeliveryWorkerState {
     iri_index: IriIndex,
     obj_repo: ObjectRepo,
+    queue: SimpleQueue,
 }
 
 impl Actor for DeliveryWorker {
@@ -44,10 +45,12 @@ impl Actor for DeliveryWorker {
         block_in_place(|| {
             let iri_index = IriIndex::new(config.keyspace.clone())?;
             let obj_repo = ObjectRepo::new(config.keyspace.clone())?;
+            let queue = SimpleQueue::new(config.keyspace.clone())?;
 
             Ok(DeliveryWorkerState {
                 iri_index,
                 obj_repo,
+                queue,
             })
         })
     }
@@ -56,7 +59,7 @@ impl Actor for DeliveryWorker {
         myself: ActorRef<Self::Msg>,
         _state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        myself.send_after(Self::State::RETRY_TIMEOUT, || DeliveryWorkerMsg::RunLoop);
+        myself.send_after(RETRY_TIMEOUT, || DeliveryWorkerMsg::RunLoop);
         Ok(())
     }
     async fn handle(
@@ -66,15 +69,34 @@ impl Actor for DeliveryWorker {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            DeliveryWorkerMsg::RunLoop => state.handle_delivery(myself).await?,
+            DeliveryWorkerMsg::RunLoop => {
+                match state.handle_delivery().await {
+                    Ok(true) => {
+                        // There might be more work to do, immediately schedule next loop
+                        ractor::cast!(myself, DeliveryWorkerMsg::RunLoop)?;
+                    }
+                    Ok(false) => {
+                        myself.send_after(RETRY_TIMEOUT, || DeliveryWorkerMsg::RunLoop);
+                    }
+                    Err(error) => {
+                        warn!(target: "apub", %error, "delivery loop failed");
+                        myself.send_after(RETRY_TIMEOUT, || DeliveryWorkerMsg::RunLoop);
+                    }
+                }
+            }
         }
         Ok(())
     }
 }
 
+const RETRY_TIMEOUT: Duration = Duration::from_secs(30);
+
 impl DeliveryWorkerState {
-    const RETRY_TIMEOUT: Duration = Duration::from_secs(30);
-    async fn handle_delivery(&mut self, myself: ActorRef<DeliveryWorkerMsg>) -> Result<()> {
+    async fn handle_delivery(&mut self) -> Result<bool> {
+        // Sleep if our local replicated queue is empty
+        if self.queue.is_empty()? {
+            return Ok(false);
+        }
         // Pull new work
         let raft_client = get_raft_local_client()?;
         let receipt_handle = uuidgen();
@@ -85,12 +107,10 @@ impl DeliveryWorkerState {
             LogEntryValue::from(command)
         )?;
         let ClientResult::Ok(bytes) = client_result else {
-            myself.send_after(Self::RETRY_TIMEOUT, || DeliveryWorkerMsg::RunLoop);
-            return Ok(());
+            return Ok(false);
         };
         if bytes.is_empty() {
-            myself.send_after(Self::RETRY_TIMEOUT, || DeliveryWorkerMsg::RunLoop);
-            return Ok(());
+            return Ok(false);
         }
         let result = ReceiveResult::from_bytes(&bytes)?;
 
@@ -104,8 +124,6 @@ impl DeliveryWorkerState {
             LogEntryValue::from(command)
         )?;
 
-        // Next loop
-        myself.send_after(Self::RETRY_TIMEOUT, || DeliveryWorkerMsg::RunLoop);
-        Ok(())
+        Ok(true)
     }
 }
