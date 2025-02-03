@@ -5,7 +5,8 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use fjall::{Keyspace, Partition, PersistMode};
 use minicbor::{Decode, Encode};
-use uuid::{Bytes, Uuid};
+
+type Bytes = [u8; 16];
 
 #[derive(Debug, Encode, Decode)]
 pub(super) struct QueueMessage {
@@ -13,16 +14,16 @@ pub(super) struct QueueMessage {
     body: Vec<u8>,
     #[n(1)]
     receipt_handle: Bytes,
+    #[n(2)]
+    retry_count: u64,
 }
 
 #[derive(Debug, Encode, Decode)]
 pub(super) struct ReceiveResult {
     #[n(0)]
-    key: Bytes,
+    pub(super) key: Bytes,
     #[n(1)]
-    message: QueueMessage,
-    #[n(2)]
-    receipt_handle: Bytes,
+    pub(super) message: QueueMessage,
 }
 
 impl ReceiveResult {
@@ -30,7 +31,7 @@ impl ReceiveResult {
         minicbor::to_vec(self).context("unable to encode ReceiveResult")
     }
     pub(super) fn from_bytes(bytes: &[u8]) -> Result<ReceiveResult> {
-        minicbor::decode(bytes).context("unable to encode ReceiveResult")
+        minicbor::decode(bytes).context("unable to decode ReceiveResult")
     }
 }
 
@@ -54,28 +55,32 @@ impl SimpleQueue {
             epoch,
         })
     }
-    pub(super) fn send_message(&self, body: &[u8]) -> Result<()> {
-        let uuid = Uuid::now_v7();
-        let receipt_handle = Uuid::now_v7();
+    pub(super) fn send_message(&self, key: Bytes, body: &[u8]) -> Result<()> {
+        let uuid = key;
+        let receipt_handle = key;
 
         let message = QueueMessage {
             body: body.into(),
-            receipt_handle: receipt_handle.into_bytes(),
+            receipt_handle,
+            retry_count: 0,
         };
 
         let bytes = minicbor::to_vec(message)?;
 
-        self.messages.insert(uuid.as_bytes(), bytes)?;
+        self.messages.insert(uuid, bytes)?;
         self.keyspace.persist(PersistMode::SyncAll)?;
 
         Ok(())
     }
-    pub(super) fn receive_message(&self, visibility_timeout: u64) -> Result<Option<ReceiveResult>> {
+    pub(super) fn receive_message(
+        &self,
+        new_receipt_handle: Bytes,
+        visibility_timeout: u64,
+    ) -> Result<Option<ReceiveResult>> {
         let now = self.epoch.elapsed().as_secs();
 
         for item in self.messages.iter() {
-            let (key_bytes, value_bytes) = item?;
-            let key = Uuid::from_bytes(key_bytes.as_ref().try_into()?);
+            let (key, value_bytes) = item?;
 
             // Check visibility
             if let Some(visible_at) = self.visibility.get(&key)? {
@@ -86,28 +91,23 @@ impl SimpleQueue {
             }
 
             let mut message: QueueMessage = minicbor::decode(&value_bytes)?;
-            let new_receipt_handle = Uuid::now_v7();
             let new_visible_at = now + visibility_timeout;
 
             // Update in atomic batch
             let mut batch = self.keyspace.batch();
-            batch.insert(
-                &self.visibility,
-                key.into_bytes(),
-                new_visible_at.to_le_bytes(),
-            );
+            batch.insert(&self.visibility, key.clone(), new_visible_at.to_le_bytes());
 
-            message.receipt_handle = new_receipt_handle.into_bytes();
+            message.receipt_handle = new_receipt_handle;
+            message.retry_count += 1;
             let bytes = minicbor::to_vec(&message)?;
-            batch.insert(&self.messages, key.into_bytes(), bytes);
+            batch.insert(&self.messages, key.clone(), bytes);
 
             batch.commit()?;
             self.keyspace.persist(PersistMode::SyncAll)?;
 
             return Ok(Some(ReceiveResult {
-                key: key.into_bytes(),
+                key: key.as_ref().try_into()?,
                 message,
-                receipt_handle: new_receipt_handle.into_bytes(),
             }));
         }
 
@@ -136,8 +136,13 @@ impl SimpleQueue {
 mod tests {
     use anyhow::Result;
     use tempfile::tempdir;
+    use uuid::{Bytes, Uuid};
 
     use super::{ReceiveResult, SimpleQueue};
+
+    fn uuidgen() -> Bytes {
+        Uuid::now_v7().into_bytes()
+    }
 
     #[test]
     fn test_basic_flow() -> Result<()> {
@@ -146,17 +151,14 @@ mod tests {
         let queue = SimpleQueue::new(keyspace)?;
 
         // Test empty queue
-        assert!(queue.receive_message(30)?.is_none());
+        assert!(queue.receive_message(uuidgen(), 30)?.is_none());
 
         // Send message
-        queue.send_message(b"test1")?;
+        queue.send_message(uuidgen(), b"test1")?;
 
         // Receive message
-        let ReceiveResult {
-            key,
-            message: msg,
-            receipt_handle: handle,
-        } = queue.receive_message(30)?.unwrap();
+        let handle = uuidgen();
+        let ReceiveResult { key, message: msg } = queue.receive_message(handle, 30)?.unwrap();
         assert_eq!(msg.body, b"test1");
         assert_eq!(handle, msg.receipt_handle);
 
@@ -164,7 +166,7 @@ mod tests {
         queue.delete_message(key, handle)?;
 
         // Verify deletion
-        assert!(queue.receive_message(30)?.is_none());
+        assert!(queue.receive_message(uuidgen(), 30)?.is_none());
         Ok(())
     }
 
@@ -174,27 +176,27 @@ mod tests {
         let keyspace = fjall::Config::new(dir.path()).temporary(true).open()?;
         let queue = SimpleQueue::new(keyspace)?;
 
-        queue.send_message(b"test2")?;
+        queue.send_message(uuidgen(), b"test2")?;
 
         // First receive
+        let handle1 = uuidgen();
         let ReceiveResult {
             key: key1,
             message: msg1,
-            receipt_handle: handle1,
-        } = queue.receive_message(1)?.unwrap();
+        } = queue.receive_message(handle1, 1)?.unwrap();
 
         // Immediate retry should find nothing
-        assert!(queue.receive_message(1)?.is_none());
+        assert!(queue.receive_message(uuidgen(), 1)?.is_none());
 
         // Wait longer than timeout
         std::thread::sleep(std::time::Duration::from_secs(2));
 
         // Should receive again with new handle
+        let handle2 = uuidgen();
         let ReceiveResult {
             key: key2,
             message: msg2,
-            receipt_handle: handle2,
-        } = queue.receive_message(1)?.unwrap();
+        } = queue.receive_message(handle2, 1)?.unwrap();
         assert_eq!(key1, key2);
         assert_eq!(msg1.body, msg2.body);
         assert_ne!(handle1, handle2);
@@ -208,18 +210,18 @@ mod tests {
         let keyspace = fjall::Config::new(dir.path()).temporary(true).open()?;
         let queue = SimpleQueue::new(keyspace)?;
 
-        queue.send_message(b"test3")?;
+        queue.send_message(uuidgen(), b"test3")?;
 
+        let handle1 = uuidgen();
         let ReceiveResult {
             key: key1,
             message: _,
-            receipt_handle: handle1,
-        } = queue.receive_message(0)?.unwrap();
+        } = queue.receive_message(handle1, 0)?.unwrap();
+        let handle2 = uuidgen();
         let ReceiveResult {
             key: key2,
             message: _,
-            receipt_handle: handle2,
-        } = queue.receive_message(0)?.unwrap();
+        } = queue.receive_message(handle2, 0)?.unwrap();
 
         assert_eq!(key1, key2);
         assert_ne!(handle1, handle2);
@@ -245,7 +247,8 @@ mod tests {
         for i in 0..10 {
             let q = queue.clone();
             handles.push(std::thread::spawn(move || {
-                q.send_message(format!("msg{i}").as_bytes()).unwrap();
+                q.send_message(uuidgen(), format!("msg{i}").as_bytes())
+                    .unwrap();
             }));
         }
 
@@ -253,13 +256,10 @@ mod tests {
         for _ in 0..5 {
             let q = queue.clone();
             handles.push(std::thread::spawn(move || {
-                while let Some(ReceiveResult {
-                    key,
-                    message: _,
-                    receipt_handle: handle,
-                }) = q.receive_message(30).unwrap()
+                while let Some(ReceiveResult { key, message }) =
+                    q.receive_message(uuidgen(), 30).unwrap()
                 {
-                    q.delete_message(key, handle).unwrap();
+                    q.delete_message(key, message.receipt_handle).unwrap();
                 }
             }));
         }
@@ -270,7 +270,7 @@ mod tests {
         }
 
         // Verify all processed
-        assert!(queue.receive_message(30)?.is_none());
+        assert!(queue.receive_message(uuidgen(), 30)?.is_none());
         Ok(())
     }
 }
