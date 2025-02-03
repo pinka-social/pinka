@@ -14,7 +14,9 @@ use uuid::Uuid;
 
 use crate::activity_pub::machine::{ActivityPubCommand, C2sCommand, S2sCommand};
 use crate::activity_pub::model::{Actor, Collection, Create, Object};
-use crate::activity_pub::{ContextIndex, IriIndex, ObjectKey, ObjectRepo, OutboxIndex, UserIndex};
+use crate::activity_pub::{
+    uuidgen, ContextIndex, IriIndex, ObjectKey, ObjectRepo, OutboxIndex, UserIndex,
+};
 use crate::config::RuntimeConfig;
 use crate::worker::raft::{get_raft_local_client, LogEntryValue, RaftClientMsg};
 
@@ -334,6 +336,14 @@ async fn post_outbox(
             object: Value::from(create).into(),
         };
         let command = ActivityPubCommand::C2sCreate(scoped_cmd);
+        ractor::call!(
+            client,
+            RaftClientMsg::ClientRequest,
+            LogEntryValue::from(command)
+        )
+        .context("RPC call failed")
+        .map_err(ise)?;
+        let command = ActivityPubCommand::QueueDelivery(uuidgen(), act_key);
         ractor::call!(
             client,
             RaftClientMsg::ClientRequest,

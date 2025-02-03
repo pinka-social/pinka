@@ -111,9 +111,9 @@ pub(crate) enum ActivityPubCommand {
     #[n(9)]
     S2sAnnounce(#[n(0)] S2sCommand),
     #[n(10)]
-    QueueDelivery(#[n(0)] ObjectKey),
+    QueueDelivery(#[n(0)] Bytes, #[n(1)] ObjectKey),
     #[n(11)]
-    ReceiveDelivery(#[n(0)] u64),
+    ReceiveDelivery(#[n(0)] Bytes, #[n(1)] u64),
     #[n(12)]
     AckDelivery(#[n(0)] Bytes, #[n(1)] Bytes),
 }
@@ -191,18 +191,19 @@ impl State {
             ActivityPubCommand::S2sAnnounce(cmd) => {
                 self.handle_s2s_announce(cmd).await?;
             }
-            ActivityPubCommand::QueueDelivery(object_key) => {
-                block_in_place(|| self.queue.send_message(object_key.as_ref()))?;
+            ActivityPubCommand::QueueDelivery(key, object_key) => {
+                block_in_place(|| self.queue.send_message(key, object_key.as_ref()))?;
             }
-            ActivityPubCommand::ReceiveDelivery(visibility_timeout) => {
-                if let Some(res) =
-                    block_in_place(|| self.queue.receive_message(visibility_timeout))?
-                {
+            ActivityPubCommand::ReceiveDelivery(receipt_handle, visibility_timeout) => {
+                if let Some(res) = block_in_place(|| {
+                    self.queue
+                        .receive_message(receipt_handle, visibility_timeout)
+                })? {
                     return Ok(ClientResult::Ok(res.to_bytes()?));
                 }
             }
-            ActivityPubCommand::AckDelivery(key, handle) => {
-                block_in_place(|| self.queue.delete_message(key, handle))?;
+            ActivityPubCommand::AckDelivery(key, receipt_handle) => {
+                block_in_place(|| self.queue.delete_message(key, receipt_handle))?;
             }
         }
 
