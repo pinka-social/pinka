@@ -6,7 +6,7 @@ use tokio::task::yield_now;
 use tracing::info;
 
 use crate::config::ReplConfig;
-use crate::worker::ManholeMsg;
+use crate::manhole::ManholeMsg;
 
 pub(super) async fn run(repl_config: ReplConfig) -> Result<()> {
     let manhole = repl_config

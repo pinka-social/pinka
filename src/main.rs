@@ -1,9 +1,12 @@
 mod activity_pub;
+mod cluster;
 mod config;
 mod flags;
 mod http;
+mod manhole;
+mod raft;
 mod repl;
-mod worker;
+mod supervisor;
 
 use std::fs::File;
 use std::process::exit;
@@ -20,8 +23,8 @@ use self::config::{
     RaftConfig, ReplConfig, RuntimeConfig, ServerConfig,
 };
 use self::flags::{Dump, Pinka, PinkaCmd, RaftCmd, Serve};
-use self::worker::raft::{LogEntry, RaftSerDe};
-use self::worker::Supervisor;
+use self::raft::{LogEntry, RaftSerDe};
+use self::supervisor::Supervisor;
 
 #[tokio::main]
 async fn main() -> Result<()> {

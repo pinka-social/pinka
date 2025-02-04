@@ -18,7 +18,7 @@ use crate::activity_pub::{
     uuidgen, ContextIndex, IriIndex, ObjectKey, ObjectRepo, OutboxIndex, UserIndex,
 };
 use crate::config::RuntimeConfig;
-use crate::worker::raft::{get_raft_local_client, LogEntryValue, RaftClientMsg};
+use crate::raft::{get_raft_local_client, LogEntryValue, RaftClientMsg};
 
 #[derive(Debug, Deserialize)]
 struct PageParams {

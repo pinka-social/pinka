@@ -6,9 +6,7 @@ use tokio::task::block_in_place;
 use tracing::{info, warn};
 use uuid::Bytes;
 
-use crate::worker::raft::{
-    get_raft_applied, ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg,
-};
+use crate::raft::{get_raft_applied, ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg};
 
 use super::model::{Actor as AsActor, Create, Object};
 use super::repo::{ContextIndex, OutboxIndex};

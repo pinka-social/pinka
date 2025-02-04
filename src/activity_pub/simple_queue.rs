@@ -128,7 +128,7 @@ impl SimpleQueue {
             debug!(target: "sq", queue_name, ?key, ?message, "received message");
 
             return Ok(Some(ReceiveResult {
-                key: key.as_ref().try_into()?,
+                key: key.try_into()?,
                 message,
             }));
         }

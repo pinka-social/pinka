@@ -6,11 +6,10 @@ use crate::activity_pub::delivery::{DeliveryWorker, DeliveryWorkerInit, Delivery
 use crate::activity_pub::machine::{ActivityPubMachine, ActivityPubMachineInit};
 use crate::config::{RuntimeConfig, ServerConfig};
 use crate::flags::Serve;
-use crate::worker::raft::StateMachineMsg;
+use crate::raft::{RaftServer, RaftServerMsg, StateMachineMsg};
 
 use super::cluster::{ClusterMaint, ClusterMaintMsg};
 use super::manhole::{Manhole, ManholeMsg};
-use super::raft::{RaftServer, RaftServerMsg};
 
 pub(crate) struct Supervisor;
 
