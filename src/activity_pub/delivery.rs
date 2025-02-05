@@ -4,7 +4,7 @@ use std::time::Duration;
 use anyhow::Result;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
-use tokio::task::{block_in_place, spawn_blocking, JoinSet};
+use tokio::task::{spawn_blocking, JoinSet};
 use tracing::warn;
 
 use crate::activity_pub::uuidgen;
@@ -45,9 +45,10 @@ impl Actor for DeliveryWorker {
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         let DeliveryWorkerInit { config } = args;
-        block_in_place(|| {
-            let obj_repo = ObjectRepo::new(config.keyspace.clone())?;
-            let queue = SimpleQueue::new(config.keyspace.clone())?;
+        let keyspace = config.keyspace.clone();
+        spawn_blocking(move || {
+            let obj_repo = ObjectRepo::new(keyspace.clone())?;
+            let queue = SimpleQueue::new(keyspace.clone())?;
             let mailman = Mailman::new();
 
             Ok(DeliveryWorkerState {
@@ -56,6 +57,7 @@ impl Actor for DeliveryWorker {
                 mailman,
             })
         })
+        .await?
     }
     async fn post_start(
         &self,

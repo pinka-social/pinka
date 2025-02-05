@@ -6,7 +6,7 @@ mod state;
 mod state_machine;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ops::{Deref, RangeBounds};
+use std::ops::{Deref, RangeBounds, RangeInclusive};
 use std::time::Duration;
 
 pub(crate) use self::client::{
@@ -29,7 +29,7 @@ use ractor_cluster::{RactorClusterMessage, RactorMessage};
 use rand::{thread_rng, Rng};
 use tokio::select;
 use tokio::sync::mpsc::{channel, Sender};
-use tokio::task::block_in_place;
+use tokio::task::spawn_blocking;
 use tokio::time::{sleep, Instant};
 use tracing::{debug, info, trace, warn};
 
@@ -218,24 +218,28 @@ impl Actor for RaftWorker {
     ) -> Result<Self::State, ActorProcessingErr> {
         let config = args;
 
-        let log = block_in_place(|| {
-            config.keyspace.open_partition(
+        let keyspace = config.keyspace.clone();
+        let log = spawn_blocking(move || {
+            keyspace.open_partition(
                 "raft_log",
                 PartitionCreateOptions::default()
                     .compression(fjall::CompressionType::Lz4)
                     .manual_journal_persist(true)
                     .with_kv_separation(KvSeparationOptions::default()),
             )
-        })?;
+        })
+        .await??;
 
-        let restore = block_in_place(|| {
-            config.keyspace.open_partition(
+        let keyspace = config.keyspace.clone();
+        let restore = spawn_blocking(move || {
+            keyspace.open_partition(
                 "raft_restore",
                 PartitionCreateOptions::default()
                     .compression(fjall::CompressionType::Lz4)
                     .manual_journal_persist(true),
             )
-        })?;
+        })
+        .await??;
 
         let mut state = RaftState::new(myself, config, log, restore);
         state.restore_state().await?;
@@ -424,10 +428,12 @@ impl RaftState {
     }
 
     async fn restore_state(&mut self) -> Result<()> {
-        let saved = block_in_place(|| match self.restore.get("raft_saved") {
+        let restore = self.restore.clone();
+        let saved = spawn_blocking(move || match restore.get("raft_saved") {
             Ok(Some(value)) => RaftSaved::from_bytes(&value),
             _ => Ok(RaftSaved::default()),
-        })?;
+        })
+        .await??;
 
         let RaftSaved {
             current_term,
@@ -447,7 +453,7 @@ impl RaftState {
         self.last_queued = last_applied;
         self.last_applied = last_applied;
 
-        if let Ok(last_log) = self.get_last_log_entry() {
+        if let Ok(last_log) = self.get_last_log_entry().await {
             info!(
                 target: "raft",
                 last_log_term = last_log.term,
@@ -467,22 +473,24 @@ impl RaftState {
             voted_for: self.voted_for.clone(),
             last_applied: self.last_applied,
         };
-        block_in_place(|| {
+        let keyspace = self.config.keyspace.clone();
+        let restore = self.restore.clone();
+        spawn_blocking(move || {
             saved
                 .to_bytes()
                 .context("Failed to serialize raft_saved state")
                 .and_then(|value| {
-                    self.restore
+                    restore
                         .insert("raft_saved", value.as_slice())
                         .context("Failed to update raft_saved state")
                 })
                 .and_then(|_| {
-                    self.config
-                        .keyspace
+                    keyspace
                         .persist(fjall::PersistMode::SyncAll)
                         .context("Failed to persist change")
                 })
-        })?;
+        })
+        .await??;
         Ok(())
     }
 
@@ -664,7 +672,7 @@ impl RaftState {
         }
         // At least one log entry must be from the current term to guarantee
         // that no server without them can be elected.
-        let log_entry = self.get_log_entry(new_commit_index);
+        let log_entry = self.get_log_entry(new_commit_index).await;
         if let Ok(entry) = log_entry {
             if entry.term == self.current_term {
                 self.commit_index = new_commit_index;
@@ -751,7 +759,7 @@ impl RaftState {
         let log_ok = request.prev_log_index == 0
             || (request.prev_log_index > 0
                 && request.prev_log_index <= self.last_log_index
-                && request.prev_log_term == self.get_log_entry(request.prev_log_index)?.term);
+                && request.prev_log_term == self.get_log_entry(request.prev_log_index).await?.term);
 
         let mut response = AppendEntriesReply {
             term: self.current_term,
@@ -783,7 +791,7 @@ impl RaftState {
         let index = request.prev_log_index + 1;
         if request.entries.is_empty()
             || (self.last_log_index >= index
-                && self.get_log_entry(index)?.term == request.entries[0].term)
+                && self.get_log_entry(index).await?.term == request.entries[0].term)
         {
             // already done with request
             self.commit_index = request.commit_index;
@@ -798,10 +806,10 @@ impl RaftState {
         }
         if !request.entries.is_empty()
             && self.last_log_index >= index
-            && self.get_log_entry(index)?.term != request.entries[0].term
+            && self.get_log_entry(index).await?.term != request.entries[0].term
         {
             // conflict: remove 1 entry
-            self.remove_last_log_entry()?;
+            self.remove_last_log_entry().await?;
             self.set_election_timer();
 
             if let Err(error) = reply.send(response) {
@@ -810,7 +818,7 @@ impl RaftState {
             return Ok(());
         }
         if !request.entries.is_empty() && self.last_log_index == request.prev_log_index {
-            self.replicate_log_entries(&request.entries)?;
+            self.replicate_log_entries(request.entries).await?;
             response.success = true;
             self.set_election_timer();
             if let Err(error) = reply.send(response) {
@@ -878,7 +886,7 @@ impl RaftState {
         self.persist_state().await?;
         self.unset_election_timer();
         self.reset_match_index();
-        self.append_log(LogEntryValue::NewTermStarted)?;
+        self.append_log(LogEntryValue::NewTermStarted).await?;
         self.spawn_replicate_workers().await?;
         Ok(())
     }
@@ -925,7 +933,7 @@ impl RaftState {
         reply: RpcReplyPort<ClientResult>,
     ) -> Result<()> {
         if matches!(self.role, RaftRole::Leader) {
-            let log_index = self.append_log(request)?;
+            let log_index = self.append_log(request).await?;
             self.pending_responses.insert(log_index, reply);
             return Ok(());
         }
@@ -970,8 +978,11 @@ impl RaftState {
         // TODO configurable machine name
         if let Some(machine) = ActorRef::where_is("state_machine".into()) {
             // TODO avoid message pile up
-            for log_entry in self.log_entry_range(self.last_queued + 1..=self.commit_index) {
-                ractor::cast!(machine, StateMachineMsg::Apply(log_entry?))?;
+            for log_entry in self
+                .log_entry_range(self.last_queued + 1..=self.commit_index)
+                .await?
+            {
+                ractor::cast!(machine, StateMachineMsg::Apply(log_entry))?;
             }
             self.last_queued = u64::max(self.last_queued, self.commit_index);
         } else {
@@ -1004,85 +1015,99 @@ impl RaftState {
         None
     }
 
-    fn get_last_log_entry(&self) -> Result<LogEntry> {
-        block_in_place(|| {
-            self.log
-                .last_key_value()
+    async fn get_last_log_entry(&self) -> Result<LogEntry> {
+        let log = self.log.clone();
+        spawn_blocking(move || {
+            log.last_key_value()
                 .context("get log entry failed")?
                 .ok_or_else(|| anyhow!("index out of range"))
                 .and_then(|(_, slice)| {
                     LogEntry::from_bytes(&slice).context("failed to deserialize log entry")
                 })
         })
+        .await?
     }
 
-    fn get_log_entry(&self, index: u64) -> Result<LogEntry> {
-        block_in_place(|| {
-            self.log
-                .get(index.to_be_bytes())
+    async fn get_log_entry(&self, index: u64) -> Result<LogEntry> {
+        let log = self.log.clone();
+        spawn_blocking(move || {
+            log.get(index.to_be_bytes())
                 .context("get log entry failed")?
                 .ok_or_else(|| anyhow!("log entry index {index} does not exist"))
                 .and_then(|slice| {
                     LogEntry::from_bytes(&slice).context("failed to deserialize log entry")
                 })
         })
+        .await?
     }
 
     // TODO: fail on error?
-    fn log_entry_range(
-        &self,
-        range: impl RangeBounds<u64>,
-    ) -> impl Iterator<Item = Result<LogEntry>> {
-        block_in_place(|| {
-            self.log
-                .range((
-                    range.start_bound().map(|b| b.to_be_bytes()),
-                    range.end_bound().map(|b| b.to_be_bytes()),
-                ))
-                .map(|r| {
-                    r.context("get log entry failed").and_then(|(_, slice)| {
-                        LogEntry::from_bytes(&slice).context("failed to deserialize log entry")
-                    })
+    async fn log_entry_range(&self, range: RangeInclusive<u64>) -> Result<Vec<LogEntry>> {
+        let log = self.log.clone();
+        spawn_blocking(move || {
+            log.range((
+                range.start_bound().map(|b| b.to_be_bytes()),
+                range.end_bound().map(|b| b.to_be_bytes()),
+            ))
+            .map(|r| {
+                r.context("get log entry failed").and_then(|(_, slice)| {
+                    LogEntry::from_bytes(&slice).context("failed to deserialize log entry")
                 })
+            })
+            .collect()
         })
+        .await?
     }
 
-    fn append_log(&mut self, value: LogEntryValue) -> Result<u64> {
+    async fn append_log(&mut self, value: LogEntryValue) -> Result<u64> {
         let index = self.last_log_index + 1;
         let new_log_entry = LogEntry {
             index,
             term: self.current_term,
             value,
         };
+        let keyspace = self.config.keyspace.clone();
+        let log = self.log.clone();
         let value_bytes = new_log_entry.to_bytes()?;
-        block_in_place(|| -> Result<()> {
-            self.log.insert(index.to_be_bytes(), value_bytes)?;
-            self.config.keyspace.persist(fjall::PersistMode::SyncAll)?;
+        spawn_blocking(move || -> Result<()> {
+            log.insert(index.to_be_bytes(), value_bytes)?;
+            keyspace.persist(fjall::PersistMode::SyncAll)?;
             Ok(())
-        })?;
+        })
+        .await??;
         self.last_log_index = index;
         self.last_log_term = self.current_term;
         Ok(self.last_log_index)
     }
 
-    fn replicate_log_entries(&mut self, entries: &[LogEntry]) -> Result<()> {
-        block_in_place(|| -> Result<()> {
+    async fn replicate_log_entries(&mut self, entries: Vec<LogEntry>) -> Result<()> {
+        let Some((last_log_index, last_log_term)) =
+            entries.last().map(|entry| (entry.index, entry.term))
+        else {
+            return Ok(());
+        };
+        let keyspace = self.config.keyspace.clone();
+        let log = self.log.clone();
+        spawn_blocking(move || -> Result<()> {
             for entry in entries {
                 let value_bytes = entry.to_bytes()?;
-                self.log.insert(entry.index.to_be_bytes(), value_bytes)?;
-                self.last_log_index = entry.index;
-                self.last_log_term = entry.term;
+                log.insert(entry.index.to_be_bytes(), value_bytes)?;
             }
-            self.config.keyspace.persist(fjall::PersistMode::SyncAll)?;
+            keyspace.persist(fjall::PersistMode::SyncAll)?;
             Ok(())
-        })?;
+        })
+        .await??;
+        self.last_log_index = last_log_index;
+        self.last_log_term = last_log_term;
         Ok(())
     }
 
-    fn remove_last_log_entry(&mut self) -> Result<()> {
-        block_in_place(|| self.log.remove(self.last_log_index.to_be_bytes()))?;
+    async fn remove_last_log_entry(&mut self) -> Result<()> {
+        let log = self.log.clone();
+        let last_log_index = self.last_log_index;
+        spawn_blocking(move || log.remove(last_log_index.to_be_bytes())).await??;
         self.last_log_index -= 1;
-        self.last_log_term = self.get_log_entry(self.last_log_index)?.term;
+        self.last_log_term = self.get_log_entry(self.last_log_index).await?.term;
         Ok(())
     }
 
