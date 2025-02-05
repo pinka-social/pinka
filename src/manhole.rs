@@ -5,8 +5,7 @@ use ractor_cluster::{NodeServer, RactorClusterMessage};
 use tracing::warn;
 
 use crate::config::{RuntimeConfig, ServerConfig};
-
-use super::raft::{self, LogEntry, LogEntryList, LogEntryValue, RaftClientMsg, RaftSerDe};
+use crate::raft::{self, LogEntry, LogEntryList, LogEntryValue, RaftClientMsg, RaftSerDe};
 
 pub(super) struct Manhole;
 

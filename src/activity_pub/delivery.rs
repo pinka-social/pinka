@@ -7,7 +7,7 @@ use tokio::task::{block_in_place, spawn_blocking};
 use tracing::warn;
 
 use crate::activity_pub::uuidgen;
-use crate::worker::raft::{get_raft_local_client, ClientResult, LogEntryValue, RaftClientMsg};
+use crate::raft::{get_raft_local_client, ClientResult, LogEntryValue, RaftClientMsg};
 use crate::RuntimeConfig;
 
 use super::machine::ActivityPubCommand;

@@ -6,9 +6,7 @@ use tokio::task::block_in_place;
 use tracing::{info, warn};
 use uuid::Bytes;
 
-use crate::worker::raft::{
-    get_raft_applied, ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg,
-};
+use crate::raft::{get_raft_applied, ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg};
 
 use super::model::{Actor as AsActor, Create, Object};
 use super::repo::{ContextIndex, OutboxIndex};
@@ -156,6 +154,8 @@ impl From<ActivityPubCommand> for LogEntryValue {
     }
 }
 
+const MAILBOX: &str = "mailbox";
+
 impl State {
     async fn handle_command(&mut self, command: ActivityPubCommand) -> Result<ClientResult> {
         info!(target: "apub", ?command, "received command");
@@ -192,18 +192,18 @@ impl State {
                 self.handle_s2s_announce(cmd).await?;
             }
             ActivityPubCommand::QueueDelivery(key, object_key) => {
-                block_in_place(|| self.queue.send_message(key, object_key.as_ref()))?;
+                block_in_place(|| self.queue.send_message(MAILBOX, key, object_key.as_ref()))?;
             }
             ActivityPubCommand::ReceiveDelivery(receipt_handle, now, visibility_timeout) => {
                 if let Some(res) = block_in_place(|| {
                     self.queue
-                        .receive_message(receipt_handle, now, visibility_timeout)
+                        .receive_message(MAILBOX, receipt_handle, now, visibility_timeout)
                 })? {
                     return Ok(ClientResult::Ok(res.to_bytes()?));
                 }
             }
             ActivityPubCommand::AckDelivery(key, receipt_handle) => {
-                block_in_place(|| self.queue.delete_message(key, receipt_handle))?;
+                block_in_place(|| self.queue.delete_message(MAILBOX, key, receipt_handle))?;
             }
         }
 

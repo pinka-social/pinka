@@ -3,8 +3,7 @@ use minicbor::{Decode, Encode};
 use ractor::{ActorRef, DerivedActorRef, RpcReplyPort};
 use ractor_cluster::RactorClusterMessage;
 
-use crate::worker::raft::RaftWorker;
-
+use super::RaftWorker;
 use super::{LogEntryValue, RaftMsg};
 
 #[derive(RactorClusterMessage)]
