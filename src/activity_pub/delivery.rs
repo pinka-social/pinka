@@ -1,9 +1,10 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
-use tokio::task::{block_in_place, spawn_blocking};
+use tokio::task::{block_in_place, spawn_blocking, JoinSet};
 use tracing::warn;
 
 use crate::activity_pub::uuidgen;
@@ -14,7 +15,7 @@ use super::machine::ActivityPubCommand;
 use super::mailman::Mailman;
 use super::model::Object;
 use super::simple_queue::{ReceiveResult, SimpleQueue};
-use super::{IriIndex, ObjectRepo};
+use super::ObjectRepo;
 
 pub(crate) struct DeliveryWorker;
 
@@ -28,7 +29,6 @@ pub(crate) struct DeliveryWorkerInit {
 }
 
 pub(crate) struct DeliveryWorkerState {
-    iri_index: IriIndex,
     obj_repo: ObjectRepo,
     queue: SimpleQueue,
     mailman: Mailman,
@@ -46,13 +46,11 @@ impl Actor for DeliveryWorker {
     ) -> Result<Self::State, ActorProcessingErr> {
         let DeliveryWorkerInit { config } = args;
         block_in_place(|| {
-            let iri_index = IriIndex::new(config.keyspace.clone())?;
             let obj_repo = ObjectRepo::new(config.keyspace.clone())?;
             let queue = SimpleQueue::new(config.keyspace.clone())?;
             let mailman = Mailman::new();
 
             Ok(DeliveryWorkerState {
-                iri_index,
                 obj_repo,
                 queue,
                 mailman,
@@ -122,8 +120,6 @@ impl DeliveryWorkerState {
         let obj_key = message.body;
         let obj_repo = self.obj_repo.clone();
         if let Some(object) = spawn_blocking(move || obj_repo.find_one(obj_key)).await?? {
-            // info!(target: "apub", ?result, "simulate delivery");
-
             // Collect recipients
             let mut recipients = vec![];
             for target in ["to", "bto", "cc", "bcc", "audience"] {
@@ -135,26 +131,43 @@ impl DeliveryWorkerState {
                     recipients.push(iri);
                 }
             }
-            // Skip public addressing
-            // TODO
+            // Convert to inbox
+            let mut inboxes = vec![];
+            for iri in recipients {
+                // 5.6 Skip public addressing
+                if iri == "https://www.w3.org/ns/activitystreams#Public"
+                    || iri == "as:Public"
+                    || iri == "Public"
+                {
+                    continue;
+                }
+                let value = self.mailman.fetch(iri).await?;
+                let object = Object::from(value);
+                if object.type_is("Collection") || object.type_is("OrderedCollection") {
+                    inboxes.extend(self.discover_inboxes(&object).await?);
+                    continue;
+                }
+                if let Some(inbox) = object.get_str("inbox") {
+                    inboxes.push(inbox.to_string());
+                }
+            }
 
             // De-duplicate the final recipient list
-            recipients.sort();
-            recipients.dedup();
+            inboxes.sort();
+            inboxes.dedup();
 
             // Remove self and attributedTo and origin actor
             // TODO
 
             // Deliver
-            // TODO JoinSet
-            for iri in recipients {
-                let value = self.mailman.fetch(iri).await?;
-                let actor = Object::from(value);
-                if let Some(inbox) = actor.get_str("inbox") {
-                    // TODO error handling
-                    self.mailman.post(inbox, &object).await?;
-                }
+            let object = Arc::new(object);
+            let mut join_set = JoinSet::new();
+            for inbox in inboxes {
+                let mailman = self.mailman.clone();
+                let object = object.clone();
+                join_set.spawn(async move { mailman.post(&inbox, object.as_ref()).await });
             }
+            join_set.join_all().await;
         }
         // Ack
         let command = ActivityPubCommand::AckDelivery(result.key, receipt_handle);
@@ -165,5 +178,39 @@ impl DeliveryWorkerState {
         )?;
 
         Ok(true)
+    }
+
+    async fn discover_inboxes(&self, object: &Object<'_>) -> Result<Vec<String>> {
+        let mut next = object.get_str("first").map(str::to_string);
+
+        let mut result_set = JoinSet::new();
+        while let Some(iri) = next {
+            let value = self.mailman.fetch(&iri).await?;
+            let page = Object::from(value);
+            let items = page
+                .get_str_array("items")
+                .or_else(|| page.get_str_array("orderedItems"));
+            if let Some(items) = items {
+                for item in items {
+                    let mailman = self.mailman.clone();
+                    let iri = item.to_string();
+                    result_set.spawn(async move {
+                        if let Ok(value) = mailman.fetch(&iri).await {
+                            let object = Object::from(value);
+                            // skip nested collections
+                            object
+                                .get_endpoint("sharedInbox")
+                                .or_else(|| object.get_str("inbox"))
+                                .map(str::to_string)
+                        } else {
+                            None
+                        }
+                    });
+                }
+            }
+            next = page.get_str("next").map(str::to_string);
+        }
+        let result = result_set.join_all().await.into_iter().flatten().collect();
+        Ok(result)
     }
 }
