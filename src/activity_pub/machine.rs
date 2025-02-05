@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use fjall::{Keyspace, PersistMode};
 use minicbor::{Decode, Encode};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
-use tokio::task::block_in_place;
+use tokio::task::spawn_blocking;
 use tracing::{info, warn};
 use uuid::Bytes;
 
@@ -40,7 +40,7 @@ impl Actor for ActivityPubMachine {
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         let ActivityPubMachineInit { keyspace } = args;
-        block_in_place(|| {
+        spawn_blocking(move || {
             let user_index = UserIndex::new(keyspace.clone())?;
             let outbox_index = OutboxIndex::new(keyspace.clone())?;
             let ctx_index = ContextIndex::new(keyspace.clone())?;
@@ -57,6 +57,7 @@ impl Actor for ActivityPubMachine {
                 queue,
             })
         })
+        .await?
     }
 
     async fn handle(
@@ -192,33 +193,42 @@ impl State {
                 self.handle_s2s_announce(cmd).await?;
             }
             ActivityPubCommand::QueueDelivery(key, object_key) => {
-                block_in_place(|| self.queue.send_message(MAILBOX, key, object_key.as_ref()))?;
+                let queue = self.queue.clone();
+                spawn_blocking(move || queue.send_message(MAILBOX, key, object_key.as_ref()))
+                    .await??;
             }
             ActivityPubCommand::ReceiveDelivery(receipt_handle, now, visibility_timeout) => {
-                if let Some(res) = block_in_place(|| {
-                    self.queue
-                        .receive_message(MAILBOX, receipt_handle, now, visibility_timeout)
-                })? {
+                let queue = self.queue.clone();
+                if let Some(res) = spawn_blocking(move || {
+                    queue.receive_message(MAILBOX, receipt_handle, now, visibility_timeout)
+                })
+                .await??
+                {
                     return Ok(ClientResult::Ok(res.to_bytes()?));
                 }
             }
             ActivityPubCommand::AckDelivery(key, receipt_handle) => {
-                block_in_place(|| self.queue.delete_message(MAILBOX, key, receipt_handle))?;
+                let queue = self.queue.clone();
+                spawn_blocking(move || queue.delete_message(MAILBOX, key, receipt_handle))
+                    .await??;
             }
         }
 
         Ok(ClientResult::ok())
     }
-    async fn handle_new_user(&mut self, uid: String, object: Object<'_>) -> Result<()> {
+    async fn handle_new_user(&mut self, uid: String, object: Object<'static>) -> Result<()> {
         let user = AsActor::from(object);
+        let keyspace = self.keyspace.clone();
+        let user_index = self.user_index.clone();
 
-        block_in_place(|| -> Result<()> {
-            let mut b = self.keyspace.batch();
-            self.user_index.insert(&mut b, &uid, user)?;
+        spawn_blocking(move || -> Result<()> {
+            let mut b = keyspace.batch();
+            user_index.insert(&mut b, &uid, user)?;
             b.commit()?;
-            self.keyspace.persist(PersistMode::SyncAll)?;
+            keyspace.persist(PersistMode::SyncAll)?;
             Ok(())
-        })?;
+        })
+        .await??;
         Ok(())
     }
     // TODO effects
@@ -230,15 +240,17 @@ impl State {
             object,
         } = cmd;
         let create = Create::try_from(object)?;
+        let keyspace = self.keyspace.clone();
+        let outbox_index = self.outbox_index.clone();
 
-        block_in_place(|| -> Result<()> {
-            let mut b = self.keyspace.batch();
-            self.outbox_index
-                .insert_create(&mut b, uid, act_key, obj_key, create)?;
+        spawn_blocking(move || -> Result<()> {
+            let mut b = keyspace.batch();
+            outbox_index.insert_create(&mut b, uid, act_key, obj_key, create)?;
             b.commit()?;
-            self.keyspace.persist(PersistMode::SyncAll)?;
+            keyspace.persist(PersistMode::SyncAll)?;
             Ok(())
-        })?;
+        })
+        .await??;
 
         Ok(())
     }
@@ -256,14 +268,19 @@ impl State {
             // TODO let create = Create::try_from(object)?;
             // TODO save the activity and the object
 
-            block_in_place(|| -> Result<()> {
-                let mut b = self.keyspace.batch();
-                self.obj_repo.insert(&mut b, obj_key, object)?;
-                self.ctx_index.insert(&mut b, &iri, obj_key)?;
+            let keyspace = self.keyspace.clone();
+            let obj_repo = self.obj_repo.clone();
+            let ctx_index = self.ctx_index.clone();
+
+            spawn_blocking(move || -> Result<()> {
+                let mut b = keyspace.batch();
+                obj_repo.insert(&mut b, obj_key, object)?;
+                ctx_index.insert(&mut b, &iri, obj_key)?;
                 b.commit()?;
-                self.keyspace.persist(PersistMode::SyncAll)?;
+                keyspace.persist(PersistMode::SyncAll)?;
                 Ok(())
-            })?;
+            })
+            .await??;
         }
         Ok(())
     }
@@ -281,18 +298,23 @@ impl State {
                 return Ok(());
             };
             let iri = iri.to_string();
+            let keyspace = self.keyspace.clone();
+            let iri_index = self.iri_index.clone();
+            let obj_repo = self.obj_repo.clone();
+            let ctx_index = self.ctx_index.clone();
 
-            block_in_place(|| -> Result<()> {
-                let mut b = self.keyspace.batch();
+            spawn_blocking(move || -> Result<()> {
+                let mut b = keyspace.batch();
                 if let Some(activity_iri) = object.id() {
-                    self.iri_index.insert(&mut b, activity_iri, obj_key)?;
+                    iri_index.insert(&mut b, activity_iri, obj_key)?;
                 }
-                self.obj_repo.insert(&mut b, obj_key, object)?;
-                self.ctx_index.insert_likes(&mut b, &iri, obj_key)?;
+                obj_repo.insert(&mut b, obj_key, object)?;
+                ctx_index.insert_likes(&mut b, &iri, obj_key)?;
                 b.commit()?;
-                self.keyspace.persist(PersistMode::SyncAll)?;
+                keyspace.persist(PersistMode::SyncAll)?;
                 Ok(())
-            })?;
+            })
+            .await??;
         }
         Ok(())
     }
@@ -307,17 +329,22 @@ impl State {
             object,
         } = cmd;
         if object.has_props(&["object"]) {
-            block_in_place(|| -> Result<()> {
-                let mut b = self.keyspace.batch();
+            let keyspace = self.keyspace.clone();
+            let iri_index = self.iri_index.clone();
+            let obj_repo = self.obj_repo.clone();
+            let user_index = self.user_index.clone();
+            spawn_blocking(move || -> Result<()> {
+                let mut b = keyspace.batch();
                 if let Some(activity_iri) = object.id() {
-                    self.iri_index.insert(&mut b, activity_iri, obj_key)?;
+                    iri_index.insert(&mut b, activity_iri, obj_key)?;
                 }
-                self.obj_repo.insert(&mut b, obj_key, object)?;
-                self.user_index.insert_follower(&mut b, &uid, obj_key)?;
+                obj_repo.insert(&mut b, obj_key, object)?;
+                user_index.insert_follower(&mut b, &uid, obj_key)?;
                 b.commit()?;
-                self.keyspace.persist(PersistMode::SyncAll)?;
+                keyspace.persist(PersistMode::SyncAll)?;
                 Ok(())
-            })?;
+            })
+            .await??;
             // TODO send Accept or Reject back
         }
         Ok(())
@@ -331,14 +358,19 @@ impl State {
         let S2sCommand {
             uid, object: undo, ..
         } = cmd;
-        block_in_place(|| {
+        let keyspace = self.keyspace.clone();
+        let iri_index = self.iri_index.clone();
+        let obj_repo = self.obj_repo.clone();
+        let ctx_index = self.ctx_index.clone();
+        let user_index = self.user_index.clone();
+        spawn_blocking(move || {
             // We can undo Follow and Like
             // FIXME abstraction
             // Find the obj_key of the activity we should undo
             let mut undo_obj_key = None;
             if let Some(iri) = undo.get_node_iri("object") {
                 // We have an ID, but do we know this ID?
-                if let Some(slice) = self.iri_index.find_one(iri)? {
+                if let Some(slice) = iri_index.find_one(iri)? {
                     undo_obj_key = Some(ObjectKey::try_from(slice.as_ref())?);
                 } else {
                     warn!(target: "apub", "unknown activity id {iri} mentioned in Undo");
@@ -349,23 +381,21 @@ impl State {
                 }
             }
             if let Some(undo_obj_key) = undo_obj_key {
-                if let Some(activity) = self.obj_repo.find_one(undo_obj_key)? {
+                if let Some(activity) = obj_repo.find_one(undo_obj_key)? {
                     if let Some(object_iri) = activity.get_node_iri("object") {
                         if activity.type_is("Like") {
                             // Undo Like
-                            let mut b = self.keyspace.batch();
-                            self.ctx_index
-                                .remove_likes(&mut b, object_iri, undo_obj_key)?;
+                            let mut b = keyspace.batch();
+                            ctx_index.remove_likes(&mut b, object_iri, undo_obj_key)?;
                             b.commit()?;
-                            self.keyspace.persist(PersistMode::SyncAll)?;
+                            keyspace.persist(PersistMode::SyncAll)?;
                         }
                         if activity.type_is("Follow") {
                             // Undo Follow
-                            let mut b = self.keyspace.batch();
-                            self.user_index
-                                .remove_follower(&mut b, &uid, undo_obj_key)?;
+                            let mut b = keyspace.batch();
+                            user_index.remove_follower(&mut b, &uid, undo_obj_key)?;
                             b.commit()?;
-                            self.keyspace.persist(PersistMode::SyncAll)?;
+                            keyspace.persist(PersistMode::SyncAll)?;
                         }
                     }
                 } else {
@@ -374,6 +404,7 @@ impl State {
             }
             Ok(())
         })
+        .await?
     }
     async fn handle_s2s_update(&mut self, cmd: S2sCommand) -> Result<()> {
         let S2sCommand { object: update, .. } = cmd;
@@ -408,15 +439,19 @@ impl State {
                 return Ok(());
             };
             let iri = iri.to_string();
+            let keyspace = self.keyspace.clone();
+            let obj_repo = self.obj_repo.clone();
+            let ctx_index = self.ctx_index.clone();
 
-            block_in_place(|| -> Result<()> {
-                let mut b = self.keyspace.batch();
-                self.obj_repo.insert(&mut b, obj_key, announce)?;
-                self.ctx_index.insert_shares(&mut b, &iri, obj_key)?;
+            spawn_blocking(move || -> Result<()> {
+                let mut b = keyspace.batch();
+                obj_repo.insert(&mut b, obj_key, announce)?;
+                ctx_index.insert_shares(&mut b, &iri, obj_key)?;
                 b.commit()?;
-                self.keyspace.persist(PersistMode::SyncAll)?;
+                keyspace.persist(PersistMode::SyncAll)?;
                 Ok(())
-            })?;
+            })
+            .await??;
         }
         Ok(())
     }

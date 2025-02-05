@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use fjall::PartitionHandle;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
-use tokio::task::block_in_place;
+use tokio::task::spawn_blocking;
 use tracing::{info, trace, warn};
 
 use super::log_entry::LogEntry;
@@ -148,11 +148,11 @@ impl ReplicateState {
 
         let prev_log_index = self.next_index.saturating_sub(1);
         let prev_log_term = if prev_log_index > 0 {
-            self.get_log_entry(prev_log_index)?.term
+            self.get_log_entry(prev_log_index).await?.term
         } else {
             0
         };
-        let entries = self.get_log_entries()?;
+        let entries = self.get_log_entries().await?;
         let num_entries = entries.len() as u64;
         let commit_index = self.raft.commit_index.min(prev_log_index + num_entries);
         let current_term = self.raft.current_term;
@@ -219,24 +219,26 @@ impl ReplicateState {
         Ok(())
     }
 
-    fn get_log_entry(&self, index: u64) -> anyhow::Result<LogEntry> {
-        block_in_place(|| {
-            self.log
-                .get(index.to_be_bytes())
+    async fn get_log_entry(&self, index: u64) -> anyhow::Result<LogEntry> {
+        let log = self.log.clone();
+        spawn_blocking(move || {
+            log.get(index.to_be_bytes())
                 .context("get log entry failed")?
                 .ok_or_else(|| anyhow!("log entry index {index} does not exist"))
                 .and_then(|slice| {
                     LogEntry::from_bytes(&slice).context("failed to deserialize log entry")
                 })
         })
+        .await?
     }
 
-    fn get_log_entries(&self) -> anyhow::Result<Vec<LogEntry>> {
-        block_in_place(|| {
-            let mut entries = vec![];
-            let from = self.next_index.to_be_bytes();
-            let to = (self.next_index + 1).to_be_bytes();
-            for rkv in self.log.range(from..to) {
+    async fn get_log_entries(&self) -> anyhow::Result<Vec<LogEntry>> {
+        let mut entries = vec![];
+        let from = self.next_index.to_be_bytes();
+        let to = (self.next_index + 1).to_be_bytes();
+        let log = self.log.clone();
+        spawn_blocking(move || {
+            for rkv in log.range(from..to) {
                 match rkv {
                     Ok((_, v)) => entries.push(LogEntry::from_bytes(&v)?),
                     Err(_) => bail!("failed to read all entries"),
@@ -244,5 +246,6 @@ impl ReplicateState {
             }
             Ok(entries)
         })
+        .await?
     }
 }

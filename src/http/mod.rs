@@ -8,7 +8,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
-use tokio::task::block_in_place;
+use tokio::task::spawn_blocking;
 use tracing::info;
 use uuid::Uuid;
 
@@ -73,7 +73,7 @@ async fn get_actor(
     State(config): State<RuntimeConfig>,
     Path(uid): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
-    block_in_place(|| {
+    spawn_blocking(move || {
         let user_index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
         if let Some(object) = user_index.find_one(&uid).map_err(ise)? {
             let raw_actor = Actor::from(object);
@@ -82,18 +82,24 @@ async fn get_actor(
         }
         Err(StatusCode::NOT_FOUND)
     })
+    .await
+    .context("task failed")
+    .map_err(ise)?
 }
 
 async fn get_object_by_id(
     State(config): State<RuntimeConfig>,
     Path(obj_key): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
-    block_in_place(|| {
+    spawn_blocking(move || {
         let obj_key = ObjectKey::from_str(&obj_key)
             .context("invalid UUID")
             .map_err(invalid)?;
         blocking_get_object(&config, obj_key)
     })
+    .await
+    .context("task failed")
+    .map_err(ise)?
 }
 
 async fn get_object_by_iri(
@@ -104,7 +110,7 @@ async fn get_object_by_iri(
     if !matches!(method, Method::GET) {
         return Err(StatusCode::METHOD_NOT_ALLOWED);
     }
-    block_in_place(|| {
+    spawn_blocking(move || {
         let iri_index = IriIndex::new(config.keyspace.clone()).map_err(ise)?;
         let iri = format!("{}{}", config.init.activity_pub.base_url, uri.path());
         let obj_key = iri_index
@@ -117,6 +123,9 @@ async fn get_object_by_iri(
             .map_err(invalid)?;
         blocking_get_object(&config, obj_key)
     })
+    .await
+    .context("task failed")
+    .map_err(ise)?
 }
 
 fn blocking_get_object(
@@ -159,7 +168,7 @@ async fn get_object_likes_shares(
     if prop != "likes" && prop != "shares" {
         return Err(StatusCode::NOT_FOUND);
     }
-    block_in_place(|| {
+    spawn_blocking(move || {
         let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
         let obj_key = ObjectKey::from_str(&obj_key)
             .context("invalid UUID")
@@ -177,6 +186,9 @@ async fn get_object_likes_shares(
             "totalItems": count
         })))
     })
+    .await
+    .context("task failed")
+    .map_err(ise)?
 }
 
 async fn post_actor(Path(uid): Path<String>, Json(value): Json<Value>) -> Result<(), StatusCode> {
@@ -201,7 +213,7 @@ async fn get_outbox(
     Path(uid): Path<String>,
     Query(params): Query<PageParams>,
 ) -> Result<Json<Value>, StatusCode> {
-    block_in_place(|| {
+    spawn_blocking(move || {
         let index = OutboxIndex::new(config.keyspace.clone()).map_err(ise)?;
         let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
         if params.has_page() {
@@ -305,6 +317,9 @@ async fn get_outbox(
             Ok(Json(outbox.into()))
         }
     })
+    .await
+    .context("task failed")
+    .map_err(ise)?
 }
 
 async fn post_outbox(
@@ -395,7 +410,7 @@ async fn get_followers(
     Path(uid): Path<String>,
     Query(params): Query<PageParams>,
 ) -> Result<Json<Value>, StatusCode> {
-    block_in_place(|| {
+    spawn_blocking(move || {
         let index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
         if params.has_page() {
             let query = params.to_query();
@@ -462,6 +477,9 @@ async fn get_followers(
             Ok(Json(followers.into()))
         }
     })
+    .await
+    .context("task failed")
+    .map_err(ise)?
 }
 
 fn ise(_error: anyhow::Error) -> StatusCode {
