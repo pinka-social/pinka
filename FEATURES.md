@@ -19,13 +19,13 @@
         - [ ] Vocab store
         - [ ] Node store
     - [x] AS Model
-    - [ ] AS Actor
-    - [ ] AS Objects
+    - [x] AS Actor
+    - [x] AS Object
         - [ ] Article
-        - [ ] Comment
-        - [ ] Generic object
+        - [ ] Note
+        - [x] Generic object
     - [ ] Activities
-        - [ ] Create
+        - [x] Create
         - [ ] Update
         - [ ] Like
         - [ ] Follow
@@ -35,7 +35,7 @@
     - [ ] Moderation
     - [ ] Spam detection
 - [ ] ActivityPub endpoints
-    - [ ] Collections
+    - [x] Collections
         - [x] Outbox
             - [ ] bto, bcc masking
         - [x] Inbox
@@ -71,9 +71,10 @@
         - [x] Announce Activity
         - [ ] Block Activity
         - [x] Undo Activity
-        - [ ] Delivery
+        - [x] Delivery
+            - [ ] Cache actor inboxes
             - [ ] Retry
             - [ ] Forwarding from Inbox
-            - [ ] Shared Inbox Delivery
+            - [x] Shared Inbox Delivery
 - [ ] RESTful endpoints for webui
 - [ ] Webmention

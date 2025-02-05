@@ -97,6 +97,14 @@ impl Object<'_> {
         }
         None
     }
+    pub(crate) fn get_endpoint(&self, prop: &str) -> Option<&str> {
+        if let Some(value) = self.0.get("endpoints") {
+            if let Some(v) = value.get(prop) {
+                return v.as_str();
+            }
+        }
+        None
+    }
     pub(crate) fn into_owned(self) -> Object<'static> {
         Object(Cow::Owned(self.0.into_owned()))
     }
