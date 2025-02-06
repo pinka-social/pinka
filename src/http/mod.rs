@@ -5,6 +5,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{Method, StatusCode, Uri};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use ractor::ActorRef;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
@@ -18,6 +19,7 @@ use crate::activity_pub::{
     uuidgen, ContextIndex, IriIndex, ObjectKey, ObjectRepo, OutboxIndex, UserIndex,
 };
 use crate::config::RuntimeConfig;
+use crate::feed_slurp::FeedSlurpMsg;
 use crate::raft::{get_raft_local_client, LogEntryValue, RaftClientMsg};
 
 #[derive(Debug, Deserialize)]
@@ -62,6 +64,7 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
         .route("/users/{id}/followers", get(get_followers))
         .route("/as/objects/{obj_key}", get(get_object_by_id))
         .route("/as/objects/{obj_key}/{prop}", get(get_object_likes_shares))
+        .route("/as/admin/ingest_feed", post(post_ingest_feed))
         .fallback(get_object_by_iri)
         .with_state(config.clone());
     let listener = TcpListener::bind(format!("0.0.0.0:{}", config.server.http.port)).await?;
@@ -480,6 +483,30 @@ async fn get_followers(
     .await
     .context("task failed")
     .map_err(ise)?
+}
+
+#[derive(Deserialize)]
+struct IngestFeed {
+    uid: String,
+    base_url: String,
+    feed_url: String,
+}
+
+async fn post_ingest_feed(Json(ingest_feed): Json<IngestFeed>) -> Result<(), StatusCode> {
+    let Some(feed_slurp) = ActorRef::where_is("feed_slurp".to_string()) else {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    };
+    ractor::cast!(
+        feed_slurp,
+        FeedSlurpMsg::IngestFeed {
+            uid: ingest_feed.uid,
+            base_url: ingest_feed.base_url,
+            feed_url: ingest_feed.feed_url
+        }
+    )
+    .context("failed to ingest feed")
+    .map_err(ise)?;
+    Ok(())
 }
 
 fn ise(_error: anyhow::Error) -> StatusCode {

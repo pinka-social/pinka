@@ -39,8 +39,8 @@ impl OutboxIndex {
             .get_object()
             .context("Create activity should have inner object")?;
         let obj_iri = obj
-            .get_str("url")
-            .context("obj should have string literal URL")?
+            .get_str("id")
+            .context("obj should have an IRI")?
             .to_string();
         self.object_repo.insert(b, obj_key, obj)?;
         self.object_repo.insert(b, act_key, act)?;

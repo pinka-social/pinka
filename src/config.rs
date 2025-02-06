@@ -11,6 +11,7 @@ pub(crate) struct Config {
     pub(crate) cluster: ClusterConfig,
     pub(crate) database: DatabaseConfig,
     pub(crate) activity_pub: ActivityPubConfig,
+    pub(crate) feed_slurp: FeedSlurpConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -76,6 +77,10 @@ pub(crate) struct DatabaseConfig {
 pub(crate) struct ActivityPubConfig {
     pub(crate) base_url: String,
 }
+
+#[derive(Clone, Default, Debug, Deserialize)]
+#[serde(default)]
+pub(crate) struct FeedSlurpConfig {}
 
 #[derive(Clone, Default, Debug, Deserialize)]
 #[serde(default)]
