@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use fjall::{Batch, Keyspace, PartitionCreateOptions};
 
-use crate::activity_pub::model::{Create, Object};
+use crate::activity_pub::model::Object;
 
 use super::iri_index::IriIndex;
 use super::xindex::IdObjIndex;
@@ -33,18 +33,45 @@ impl OutboxIndex {
         uid: String,
         act_key: ObjectKey,
         obj_key: ObjectKey,
-        act: Create,
+        act: Object,
     ) -> Result<()> {
         let obj = act
-            .get_object()
+            .get_node_object("object")
             .context("Create activity should have inner object")?;
-        let obj_iri = obj
-            .get_str("id")
+        let obj_iri = act
+            .get_node_iri("object")
             .context("obj should have an IRI")?
             .to_string();
         self.object_repo.insert(b, obj_key, obj)?;
         self.object_repo.insert(b, act_key, act)?;
         self.iri_index.insert(b, &obj_iri, obj_key)?;
+        self.outbox_index
+            .insert(b, IdObjIndexKey::new(&uid, act_key))?;
+        Ok(())
+    }
+
+    pub(crate) fn insert_update(
+        &self,
+        b: &mut Batch,
+        uid: String,
+        act_key: ObjectKey,
+        act: Object,
+    ) -> Result<()> {
+        let obj = act
+            .get_node_object("object")
+            .context("Update activity should have inner object")?;
+        let obj_iri = act
+            .get_node_iri("object")
+            .context("obj should have an IRI")?
+            .to_string();
+        let obj_key = ObjectKey::try_from(
+            self.iri_index
+                .find_one(&obj_iri)?
+                .context("IriIndex should have object iri")?
+                .as_ref(),
+        )?;
+        self.object_repo.insert(b, obj_key, obj)?;
+        self.object_repo.insert(b, act_key, act)?;
         self.outbox_index
             .insert(b, IdObjIndexKey::new(&uid, act_key))?;
         Ok(())

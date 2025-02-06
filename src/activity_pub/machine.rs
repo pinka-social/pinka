@@ -8,7 +8,7 @@ use uuid::Bytes;
 
 use crate::raft::{get_raft_applied, ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg};
 
-use super::model::{Actor as AsActor, Create, Object};
+use super::model::{Actor as AsActor, Create, Object, Update};
 use super::repo::{ContextIndex, OutboxIndex};
 use super::simple_queue::SimpleQueue;
 use super::{IriIndex, ObjectKey, ObjectRepo, UserIndex};
@@ -231,7 +231,6 @@ impl State {
         .await??;
         Ok(())
     }
-    // TODO effects
     async fn handle_c2s_create(&mut self, cmd: C2sCommand) -> Result<()> {
         let C2sCommand {
             uid,
@@ -247,13 +246,44 @@ impl State {
             }
         };
         let keyspace = self.keyspace.clone();
+        let iri_index = self.iri_index.clone();
+        let obj_repo = self.obj_repo.clone();
         let outbox_index = self.outbox_index.clone();
 
         spawn_blocking(move || -> Result<()> {
-            let mut b = keyspace.batch();
-            outbox_index.insert_create(&mut b, uid, act_key, obj_key, create)?;
-            b.commit()?;
-            keyspace.persist(PersistMode::SyncAll)?;
+            let create: Object = create.into();
+            if let Some(iri) = create.get_node_iri("object") {
+                if let Some(object) = iri_index
+                    .find_one(iri)?
+                    .and_then(|obj_key| obj_repo.find_one(obj_key).transpose())
+                    .transpose()?
+                {
+                    let Some(update) = create.get_node_object("object") else {
+                        error!(target: "apub", "activity should have an object");
+                        return Ok(());
+                    };
+                    if update
+                        .get_str("updated")
+                        .or_else(|| update.get_str("published"))
+                        == object
+                            .get_str("updated")
+                            .or_else(|| object.get_str("published"))
+                    {
+                        // skip
+                        return Ok(());
+                    }
+                    let update = Update::try_from(update)?;
+                    let mut b = keyspace.batch();
+                    outbox_index.insert_update(&mut b, uid, act_key, update.into())?;
+                    b.commit()?;
+                    keyspace.persist(PersistMode::SyncAll)?;
+                } else {
+                    let mut b = keyspace.batch();
+                    outbox_index.insert_create(&mut b, uid, act_key, obj_key, create)?;
+                    b.commit()?;
+                    keyspace.persist(PersistMode::SyncAll)?;
+                }
+            }
             Ok(())
         })
         .await??;

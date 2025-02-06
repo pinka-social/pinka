@@ -60,6 +60,12 @@ impl Create<'_> {
     }
 }
 
+impl<'a> From<Create<'a>> for Object<'a> {
+    fn from(value: Create<'a>) -> Self {
+        value.0
+    }
+}
+
 impl From<Create<'_>> for Value {
     fn from(value: Create<'_>) -> Self {
         value.0.to_value()
