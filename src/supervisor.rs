@@ -5,6 +5,7 @@ use tracing::info;
 use crate::activity_pub::delivery::{DeliveryWorker, DeliveryWorkerInit, DeliveryWorkerMsg};
 use crate::activity_pub::machine::{ActivityPubMachine, ActivityPubMachineInit};
 use crate::config::{RuntimeConfig, ServerConfig};
+use crate::feed_slurp::{FeedSlurpMsg, FeedSlurpWorker, FeedSlurpWorkerInit};
 use crate::flags::Serve;
 use crate::raft::{RaftServer, RaftServerMsg, StateMachineMsg};
 
@@ -69,6 +70,17 @@ impl Actor for Supervisor {
             DeliveryWorker,
             DeliveryWorkerInit {
                 config: config.clone(),
+            },
+            myself.get_cell(),
+        )
+        .await?;
+
+        Actor::spawn_linked(
+            Some("feed_slurp".to_string()),
+            FeedSlurpWorker,
+            FeedSlurpWorkerInit {
+                apub: config.init.activity_pub.clone(),
+                config: config.init.feed_slurp.clone(),
             },
             myself.get_cell(),
         )
@@ -155,6 +167,18 @@ impl Actor for Supervisor {
                         DeliveryWorker,
                         DeliveryWorkerInit {
                             config: state.config.clone(),
+                        },
+                        myself.get_cell(),
+                    )
+                    .await?;
+                }
+                if matches!(actor_cell.is_message_type_of::<FeedSlurpMsg>(), Some(true)) {
+                    Actor::spawn_linked(
+                        Some("feed_slurp".to_string()),
+                        FeedSlurpWorker,
+                        FeedSlurpWorkerInit {
+                            apub: state.config.init.activity_pub.clone(),
+                            config: state.config.init.feed_slurp.clone(),
                         },
                         myself.get_cell(),
                     )

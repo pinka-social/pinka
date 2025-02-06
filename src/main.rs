@@ -1,6 +1,7 @@
 mod activity_pub;
 mod cluster;
 mod config;
+mod feed_slurp;
 mod flags;
 mod http;
 mod manhole;
@@ -19,8 +20,8 @@ use tokio::signal::unix::{signal, SignalKind};
 use tracing::{error, info};
 
 use self::config::{
-    ActivityPubConfig, ClusterConfig, Config, DatabaseConfig, HttpConfig, ManholeConfig,
-    RaftConfig, ReplConfig, RuntimeConfig, ServerConfig,
+    ActivityPubConfig, ClusterConfig, Config, DatabaseConfig, FeedSlurpConfig, HttpConfig,
+    ManholeConfig, RaftConfig, ReplConfig, RuntimeConfig, ServerConfig,
 };
 use self::flags::{Dump, Pinka, PinkaCmd, RaftCmd, Serve};
 use self::raft::{LogEntry, RaftSerDe};
@@ -136,6 +137,7 @@ async fn main() -> Result<()> {
         activity_pub: ActivityPubConfig {
             base_url: "http://localhost:7001".into(),
         },
+        feed_slurp: FeedSlurpConfig {},
     };
 
     if config.cluster.servers.len() < flags.server.unwrap_or_default() {

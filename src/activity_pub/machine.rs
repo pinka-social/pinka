@@ -3,7 +3,7 @@ use fjall::{Keyspace, PersistMode};
 use minicbor::{Decode, Encode};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use tokio::task::spawn_blocking;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use uuid::Bytes;
 
 use crate::raft::{get_raft_applied, ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg};
@@ -239,7 +239,13 @@ impl State {
             obj_key,
             object,
         } = cmd;
-        let create = Create::try_from(object)?;
+        let create = match Create::try_from(object) {
+            Ok(create) => create,
+            Err(error) => {
+                error!(target: "apub", %error, "invalid object");
+                return Ok(());
+            }
+        };
         let keyspace = self.keyspace.clone();
         let outbox_index = self.outbox_index.clone();
 
