@@ -23,7 +23,7 @@ use self::state::RaftSaved;
 pub(crate) use self::state_machine::{get_raft_applied, RaftAppliedMsg, StateMachineMsg};
 
 use anyhow::{anyhow, Context, Result};
-use fjall::{KvSeparationOptions, PartitionCreateOptions, PartitionHandle};
+use fjall::{KvSeparationOptions, PartitionCreateOptions, PartitionHandle, PersistMode};
 use ractor::{pg, Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent};
 use ractor_cluster::{RactorClusterMessage, RactorMessage};
 use rand::{thread_rng, Rng};
@@ -223,8 +223,6 @@ impl Actor for RaftWorker {
             keyspace.open_partition(
                 "raft_log",
                 PartitionCreateOptions::default()
-                    .compression(fjall::CompressionType::Lz4)
-                    .manual_journal_persist(true)
                     .with_kv_separation(KvSeparationOptions::default()),
             )
         })
@@ -232,12 +230,7 @@ impl Actor for RaftWorker {
 
         let keyspace = config.keyspace.clone();
         let restore = spawn_blocking(move || {
-            keyspace.open_partition(
-                "raft_restore",
-                PartitionCreateOptions::default()
-                    .compression(fjall::CompressionType::Lz4)
-                    .manual_journal_persist(true),
-            )
+            keyspace.open_partition("raft_restore", PartitionCreateOptions::default())
         })
         .await??;
 
@@ -486,7 +479,7 @@ impl RaftState {
                 })
                 .and_then(|_| {
                     keyspace
-                        .persist(fjall::PersistMode::SyncAll)
+                        .persist(PersistMode::SyncAll)
                         .context("Failed to persist change")
                 })
         })
@@ -581,7 +574,7 @@ impl RaftState {
     }
 
     fn unset_election_timer(&mut self) {
-        info!(target: "raft", "unset election timer");
+        debug!(target: "raft", "unset election timer");
         self.election_timer = None;
     }
 
@@ -796,12 +789,12 @@ impl RaftState {
             // already done with request
             self.commit_index = request.commit_index;
             response.success = true;
-            self.set_election_timer();
 
             if let Err(error) = reply.send(response) {
                 warn!(target: "rpc", %error, "send response to append_entries failed");
             }
             self.apply_log_entries().await?;
+            self.set_election_timer();
             return Ok(());
         }
         if !request.entries.is_empty()
@@ -810,21 +803,25 @@ impl RaftState {
         {
             // conflict: remove 1 entry
             self.remove_last_log_entry().await?;
-            self.set_election_timer();
 
             if let Err(error) = reply.send(response) {
                 warn!(target: "rpc", %error, "send response to append_entries failed");
             }
+            self.set_election_timer();
             return Ok(());
         }
         if !request.entries.is_empty() && self.last_log_index == request.prev_log_index {
+            // Is there a better way to handle timeout? Just use Instant and a
+            // regular interval to check?
+            self.unset_election_timer();
             self.replicate_log_entries(request.entries).await?;
             response.success = true;
-            self.set_election_timer();
+
             if let Err(error) = reply.send(response) {
                 warn!(target: "rpc", %error, "send response to append_entries failed");
             }
             self.apply_log_entries().await?;
+            self.set_election_timer();
             return Ok(());
         }
 
@@ -961,6 +958,11 @@ impl RaftState {
         self.last_applied = last_applied;
         self.persist_state().await?;
 
+        // Avoid flooded apply message caused election timeout
+        if !matches!(self.role, RaftRole::Leader) {
+            self.set_election_timer();
+        }
+
         info!(target: "raft", last_queued=self.last_queued, last_applied=self.last_applied, "applied");
 
         if let Some(reply) = self.pending_responses.remove(&self.last_applied) {
@@ -1071,7 +1073,7 @@ impl RaftState {
         let value_bytes = new_log_entry.to_bytes()?;
         spawn_blocking(move || -> Result<()> {
             log.insert(index.to_be_bytes(), value_bytes)?;
-            keyspace.persist(fjall::PersistMode::SyncAll)?;
+            keyspace.persist(PersistMode::SyncAll)?;
             Ok(())
         })
         .await??;
@@ -1086,14 +1088,18 @@ impl RaftState {
         else {
             return Ok(());
         };
-        let keyspace = self.config.keyspace.clone();
+        let mut batch = self
+            .config
+            .keyspace
+            .batch()
+            .durability(Some(PersistMode::SyncAll));
         let log = self.log.clone();
         spawn_blocking(move || -> Result<()> {
             for entry in entries {
                 let value_bytes = entry.to_bytes()?;
-                log.insert(entry.index.to_be_bytes(), value_bytes)?;
+                batch.insert(&log, entry.index.to_be_bytes(), value_bytes);
             }
-            keyspace.persist(fjall::PersistMode::SyncAll)?;
+            batch.commit()?;
             Ok(())
         })
         .await??;
@@ -1103,9 +1109,14 @@ impl RaftState {
     }
 
     async fn remove_last_log_entry(&mut self) -> Result<()> {
+        let keyspace = self.config.keyspace.clone();
         let log = self.log.clone();
         let last_log_index = self.last_log_index;
-        spawn_blocking(move || log.remove(last_log_index.to_be_bytes())).await??;
+        spawn_blocking(move || {
+            log.remove(last_log_index.to_be_bytes())?;
+            keyspace.persist(PersistMode::SyncAll)
+        })
+        .await??;
         self.last_log_index -= 1;
         self.last_log_term = self.get_log_entry(self.last_log_index).await?.term;
         Ok(())

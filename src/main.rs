@@ -14,7 +14,7 @@ use std::process::exit;
 
 use anyhow::Result;
 use fd_lock::RwLock;
-use fjall::{KvSeparationOptions, PartitionCreateOptions};
+use fjall::PartitionCreateOptions;
 use ractor::Actor;
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{error, info};
@@ -177,7 +177,9 @@ async fn main() -> Result<()> {
         }
     };
 
-    let keyspace = fjall::Config::new(config.database.path.join(&server.name)).open()?;
+    let keyspace = fjall::Config::new(config.database.path.join(&server.name))
+        .manual_journal_persist(true)
+        .open()?;
 
     let config = RuntimeConfig {
         init: config,
@@ -231,13 +233,9 @@ async fn serve(config: RuntimeConfig, flags: Serve) -> Result<()> {
 }
 
 fn raft_dump(config: RuntimeConfig, flags: Dump) -> Result<()> {
-    let log = config.keyspace.open_partition(
-        "raft_log",
-        PartitionCreateOptions::default()
-            .compression(fjall::CompressionType::Lz4)
-            .manual_journal_persist(true)
-            .with_kv_separation(KvSeparationOptions::default()),
-    )?;
+    let log = config
+        .keyspace
+        .open_partition("raft_log", PartitionCreateOptions::default())?;
     info!("Dump raft log entries");
     info!("=====================");
     for entry in log.range(flags.from.unwrap_or_default().to_be_bytes()..) {
