@@ -121,6 +121,9 @@ impl Actor for ReplicateWorker {
             }
             ReplicateMsg::NotifyStateChange(raft) => {
                 state.raft = raft;
+                // TODO schedule append entries to avoid notify change flooding
+                // causing election timeout
+                // state.append_entries().await?;
             }
         }
         Ok(())

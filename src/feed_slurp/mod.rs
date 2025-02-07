@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::activity_pub::machine::{ActivityPubCommand, C2sCommand};
 use crate::activity_pub::model::Object;
-use crate::activity_pub::ObjectKey;
+use crate::activity_pub::{uuidgen, ObjectKey};
 use crate::raft::{get_raft_local_client, LogEntryValue, RaftClientMsg};
 use crate::{ActivityPubConfig, FeedSlurpConfig};
 
@@ -74,12 +74,20 @@ impl FeedSlurpWorkerState {
         let client = get_raft_local_client()?;
         for entry in feed.entries.iter().rev() {
             let object = object_from_feed_entry(&self.apub.base_url, &uid, &entry);
+            let act_key = ObjectKey::new();
+            let obj_key = ObjectKey::new();
             let command = ActivityPubCommand::C2sCreate(C2sCommand {
                 uid: "kanru".to_string(),
-                act_key: ObjectKey::new(),
-                obj_key: ObjectKey::new(),
+                act_key,
+                obj_key,
                 object,
             });
+            ractor::call!(
+                client,
+                RaftClientMsg::ClientRequest,
+                LogEntryValue::from(command)
+            )?;
+            let command = ActivityPubCommand::QueueDelivery(uuidgen(), act_key);
             ractor::call!(
                 client,
                 RaftClientMsg::ClientRequest,
