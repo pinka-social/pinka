@@ -1,5 +1,5 @@
 use std::ops::Deref;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use fjall::PartitionHandle;
@@ -54,6 +54,9 @@ pub(super) struct ReplicateState {
 
     /// Whether this peer is only an observer.
     observer: bool,
+
+    /// Timestamp of last append_entries
+    anchor: Instant,
 }
 
 pub(super) struct ReplicateArgs {
@@ -96,6 +99,7 @@ impl Actor for ReplicateWorker {
             next_index: args.last_log_index + 1,
             match_index: 0,
             observer: args.observer,
+            anchor: Instant::now(),
         })
     }
 
@@ -121,9 +125,13 @@ impl Actor for ReplicateWorker {
             }
             ReplicateMsg::NotifyStateChange(raft) => {
                 state.raft = raft;
-                // TODO schedule append entries to avoid notify change flooding
-                // causing election timeout
-                // state.append_entries().await?;
+                if state.anchor.elapsed()
+                    > Duration::from_millis(state.config.init.raft.heartbeat_ms)
+                {
+                    // Schedule append_entries to avoid notify_state_change flooding
+                    // caused election timeout.
+                    state.append_entries().await?;
+                }
             }
         }
         Ok(())
@@ -148,6 +156,7 @@ impl ReplicateState {
 
     async fn append_entries(&mut self) -> Result<()> {
         // NB: Replicate worker only runs when the parent is a Leader
+        self.anchor = Instant::now();
 
         let prev_log_index = self.next_index.saturating_sub(1);
         let prev_log_term = if prev_log_index > 0 {
@@ -238,10 +247,9 @@ impl ReplicateState {
     async fn get_log_entries(&self) -> anyhow::Result<Vec<LogEntry>> {
         let mut entries = vec![];
         let from = self.next_index.to_be_bytes();
-        let to = (self.next_index + 1).to_be_bytes();
         let log = self.log.clone();
         spawn_blocking(move || {
-            for rkv in log.range(from..to) {
+            for rkv in log.range(from..).take(10) {
                 match rkv {
                     Ok((_, v)) => entries.push(LogEntry::from_bytes(&v)?),
                     Err(_) => bail!("failed to read all entries"),
