@@ -222,10 +222,9 @@ impl State {
         let user_index = self.user_index.clone();
 
         spawn_blocking(move || -> Result<()> {
-            let mut b = keyspace.batch();
+            let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
             user_index.insert(&mut b, &uid, user)?;
             b.commit()?;
-            keyspace.persist(PersistMode::SyncAll)?;
             Ok(())
         })
         .await??;
@@ -273,15 +272,13 @@ impl State {
                         return Ok(());
                     }
                     let update = Update::try_from(update)?;
-                    let mut b = keyspace.batch();
+                    let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
                     outbox_index.insert_update(&mut b, uid, act_key, update.into())?;
                     b.commit()?;
-                    keyspace.persist(PersistMode::SyncAll)?;
                 } else {
-                    let mut b = keyspace.batch();
+                    let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
                     outbox_index.insert_create(&mut b, uid, act_key, obj_key, create)?;
                     b.commit()?;
-                    keyspace.persist(PersistMode::SyncAll)?;
                 }
             }
             Ok(())
@@ -309,11 +306,10 @@ impl State {
             let ctx_index = self.ctx_index.clone();
 
             spawn_blocking(move || -> Result<()> {
-                let mut b = keyspace.batch();
+                let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
                 obj_repo.insert(&mut b, obj_key, object)?;
                 ctx_index.insert(&mut b, &iri, obj_key)?;
                 b.commit()?;
-                keyspace.persist(PersistMode::SyncAll)?;
                 Ok(())
             })
             .await??;
@@ -340,14 +336,13 @@ impl State {
             let ctx_index = self.ctx_index.clone();
 
             spawn_blocking(move || -> Result<()> {
-                let mut b = keyspace.batch();
+                let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
                 if let Some(activity_iri) = object.id() {
                     iri_index.insert(&mut b, activity_iri, obj_key)?;
                 }
                 obj_repo.insert(&mut b, obj_key, object)?;
                 ctx_index.insert_likes(&mut b, &iri, obj_key)?;
                 b.commit()?;
-                keyspace.persist(PersistMode::SyncAll)?;
                 Ok(())
             })
             .await??;
@@ -370,14 +365,13 @@ impl State {
             let obj_repo = self.obj_repo.clone();
             let user_index = self.user_index.clone();
             spawn_blocking(move || -> Result<()> {
-                let mut b = keyspace.batch();
+                let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
                 if let Some(activity_iri) = object.id() {
                     iri_index.insert(&mut b, activity_iri, obj_key)?;
                 }
                 obj_repo.insert(&mut b, obj_key, object)?;
                 user_index.insert_follower(&mut b, &uid, obj_key)?;
                 b.commit()?;
-                keyspace.persist(PersistMode::SyncAll)?;
                 Ok(())
             })
             .await??;
@@ -421,17 +415,15 @@ impl State {
                     if let Some(object_iri) = activity.get_node_iri("object") {
                         if activity.type_is("Like") {
                             // Undo Like
-                            let mut b = keyspace.batch();
+                            let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
                             ctx_index.remove_likes(&mut b, object_iri, undo_obj_key)?;
                             b.commit()?;
-                            keyspace.persist(PersistMode::SyncAll)?;
                         }
                         if activity.type_is("Follow") {
                             // Undo Follow
-                            let mut b = keyspace.batch();
+                            let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
                             user_index.remove_follower(&mut b, &uid, undo_obj_key)?;
                             b.commit()?;
-                            keyspace.persist(PersistMode::SyncAll)?;
                         }
                     }
                 } else {
@@ -480,11 +472,10 @@ impl State {
             let ctx_index = self.ctx_index.clone();
 
             spawn_blocking(move || -> Result<()> {
-                let mut b = keyspace.batch();
+                let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
                 obj_repo.insert(&mut b, obj_key, announce)?;
                 ctx_index.insert_shares(&mut b, &iri, obj_key)?;
                 b.commit()?;
-                keyspace.persist(PersistMode::SyncAll)?;
                 Ok(())
             })
             .await??;

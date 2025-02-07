@@ -1,5 +1,5 @@
 use anyhow::Result;
-use fjall::{KvSeparationOptions, PartitionCreateOptions};
+use fjall::PartitionCreateOptions;
 use ractor::{pg, Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent};
 use ractor_cluster::{NodeServer, RactorClusterMessage};
 use tracing::warn;
@@ -110,13 +110,10 @@ impl ManholeState {
         reply: RpcReplyPort<LogEntryList>,
     ) -> Result<()> {
         // TODO: abstract db operation
-        let log = self.config.keyspace.open_partition(
-            "raft_log",
-            PartitionCreateOptions::default()
-                .compression(fjall::CompressionType::Lz4)
-                .manual_journal_persist(true)
-                .with_kv_separation(KvSeparationOptions::default()),
-        )?;
+        let log = self
+            .config
+            .keyspace
+            .open_partition("raft_log", PartitionCreateOptions::default())?;
         let mut items = vec![];
         for entry in log.range(from.to_be_bytes()..) {
             let (_, value) = entry.unwrap();

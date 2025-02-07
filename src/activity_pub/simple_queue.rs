@@ -110,7 +110,7 @@ impl SimpleQueue {
             let new_visible_at = now + visibility_timeout;
 
             // Update in atomic batch
-            let mut batch = self.keyspace.batch();
+            let mut batch = self.keyspace.batch().durability(Some(PersistMode::SyncAll));
             batch.insert(&self.visibility, key.clone(), new_visible_at.to_le_bytes());
 
             message.receipt_handle = new_receipt_handle;
@@ -119,7 +119,6 @@ impl SimpleQueue {
             batch.insert(&self.messages, key.clone(), bytes);
 
             batch.commit()?;
-            self.keyspace.persist(PersistMode::SyncAll)?;
 
             let key = key
                 .strip_prefix(queue_name.as_bytes())
@@ -142,7 +141,7 @@ impl SimpleQueue {
         receipt_handle: Bytes,
     ) -> Result<bool> {
         let q_key = q_key(queue_name, key);
-        let mut batch = self.keyspace.batch();
+        let mut batch = self.keyspace.batch().durability(Some(PersistMode::SyncAll));
 
         if let Some(message) = self.messages.get(&q_key)? {
             let message: QueueMessage = minicbor::decode(&message)?;
@@ -156,7 +155,6 @@ impl SimpleQueue {
         }
 
         batch.commit()?;
-        self.keyspace.persist(PersistMode::SyncAll)?;
         Ok(true)
     }
 }

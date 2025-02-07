@@ -173,6 +173,7 @@ impl Actor for Supervisor {
                     .await?;
                 }
                 if matches!(actor_cell.is_message_type_of::<FeedSlurpMsg>(), Some(true)) {
+                    info!(target: "supervision", error, "feed slurp worker crashed, restarting...");
                     Actor::spawn_linked(
                         Some("feed_slurp".to_string()),
                         FeedSlurpWorker,
