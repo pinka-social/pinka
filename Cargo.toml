@@ -10,6 +10,7 @@ default-run = "pinka"
 anyhow = "1.0"
 aws-lc-rs = "1.12.2"
 axum = "0.8.1"
+base64ct = { version = "1.6.0", features = ["alloc"] }
 bimap = "0.6.3"
 fd-lock = "4.0.2"
 feed-rs = "2.3.1"
@@ -26,6 +27,7 @@ rustls-pki-types = { version = "1.10.1", features = ["std"] }
 rustls-platform-verifier = "0.5.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.10.8"
 tokio = { version = "1.42", features = [
     "fs",
     "macros",

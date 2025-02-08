@@ -15,6 +15,7 @@ use tokio::task::spawn_blocking;
 use tracing::info;
 use uuid::Uuid;
 
+use crate::activity_pub::delivery::DeliveryQueueItem;
 use crate::activity_pub::machine::{ActivityPubCommand, C2sCommand, S2sCommand};
 use crate::activity_pub::model::{Actor, Collection, Create, Object};
 use crate::activity_pub::{
@@ -374,7 +375,7 @@ async fn post_outbox(
             .with_actor(format!("{}/users/{uid}", config.init.activity_pub.base_url));
         let client = get_raft_local_client().map_err(ise)?;
         let scoped_cmd = C2sCommand {
-            uid,
+            uid: uid.clone(),
             act_key,
             obj_key,
             object: Value::from(create).into(),
@@ -387,7 +388,10 @@ async fn post_outbox(
         )
         .context("RPC call failed")
         .map_err(ise)?;
-        let command = ActivityPubCommand::QueueDelivery(uuidgen(), act_key);
+        // XXX: in case of update, the `obj_key` is not used, so this
+        // queue_delivery will be unable to find the item for delivery.
+        let command =
+            ActivityPubCommand::QueueDelivery(uuidgen(), DeliveryQueueItem { uid, act_key });
         ractor::call!(
             client,
             RaftClientMsg::ClientRequest,

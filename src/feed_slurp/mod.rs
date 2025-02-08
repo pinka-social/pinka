@@ -4,6 +4,7 @@ use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
 use serde_json::json;
 
+use crate::activity_pub::delivery::DeliveryQueueItem;
 use crate::activity_pub::machine::{ActivityPubCommand, C2sCommand};
 use crate::activity_pub::model::Object;
 use crate::activity_pub::{uuidgen, ObjectKey};
@@ -77,7 +78,7 @@ impl FeedSlurpWorkerState {
             let act_key = ObjectKey::new();
             let obj_key = ObjectKey::new();
             let command = ActivityPubCommand::C2sCreate(C2sCommand {
-                uid: "kanru".to_string(),
+                uid: uid.to_string(),
                 act_key,
                 obj_key,
                 object,
@@ -87,7 +88,13 @@ impl FeedSlurpWorkerState {
                 RaftClientMsg::ClientRequest,
                 LogEntryValue::from(command)
             )?;
-            let command = ActivityPubCommand::QueueDelivery(uuidgen(), act_key);
+            let command = ActivityPubCommand::QueueDelivery(
+                uuidgen(),
+                DeliveryQueueItem {
+                    uid: uid.to_string(),
+                    act_key,
+                },
+            );
             ractor::call!(
                 client,
                 RaftClientMsg::ClientRequest,

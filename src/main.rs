@@ -30,6 +30,9 @@ use self::supervisor::Supervisor;
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
+    tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("cannot init default crypt provider");
 
     let flags = Pinka::from_env_or_exit();
 

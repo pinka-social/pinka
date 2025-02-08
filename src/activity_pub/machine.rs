@@ -8,6 +8,7 @@ use uuid::Bytes;
 
 use crate::raft::{get_raft_applied, ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg};
 
+use super::delivery::DeliveryQueueItem;
 use super::model::{Actor as AsActor, Create, Object, Update};
 use super::repo::{ContextIndex, CryptoRepo, OutboxIndex};
 use super::simple_queue::SimpleQueue;
@@ -113,7 +114,7 @@ pub(crate) enum ActivityPubCommand {
     #[n(9)]
     S2sAnnounce(#[n(0)] S2sCommand),
     #[n(10)]
-    QueueDelivery(#[n(0)] Bytes, #[n(1)] ObjectKey),
+    QueueDelivery(#[n(0)] Bytes, #[n(1)] DeliveryQueueItem),
     #[n(11)]
     ReceiveDelivery(#[n(0)] Bytes, #[n(1)] u64, #[n(2)] u64),
     #[n(12)]
@@ -195,9 +196,9 @@ impl State {
             ActivityPubCommand::S2sAnnounce(cmd) => {
                 self.handle_s2s_announce(cmd).await?;
             }
-            ActivityPubCommand::QueueDelivery(key, object_key) => {
+            ActivityPubCommand::QueueDelivery(key, item) => {
                 let queue = self.queue.clone();
-                spawn_blocking(move || queue.send_message(MAILBOX, key, object_key.as_ref()))
+                spawn_blocking(move || queue.send_message(MAILBOX, key, item.to_bytes()?))
                     .await??;
             }
             ActivityPubCommand::ReceiveDelivery(receipt_handle, now, visibility_timeout) => {

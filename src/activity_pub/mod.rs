@@ -1,5 +1,6 @@
 #[macro_use]
 mod object_serde;
+mod hs2019;
 mod mailman;
 mod repo;
 mod simple_queue;
