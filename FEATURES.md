@@ -76,5 +76,8 @@
             - [ ] Retry
             - [ ] Forwarding from Inbox
             - [x] Shared Inbox Delivery
+- [ ] Security
+    - [ ] HTTP Signature cavage-12
+    - [ ] HTTP Signature RFC 9421
 - [ ] RESTful endpoints for webui
 - [ ] Webmention

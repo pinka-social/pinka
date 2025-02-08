@@ -1,6 +1,8 @@
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
+use aws_lc_rs::encoding::AsDer;
+use aws_lc_rs::rsa::{KeySize, PrivateDecryptingKey};
 use axum::extract::{Path, Query, State};
 use axum::http::{Method, StatusCode, Uri};
 use axum::routing::{get, post};
@@ -16,7 +18,7 @@ use uuid::Uuid;
 use crate::activity_pub::machine::{ActivityPubCommand, C2sCommand, S2sCommand};
 use crate::activity_pub::model::{Actor, Collection, Create, Object};
 use crate::activity_pub::{
-    uuidgen, ContextIndex, IriIndex, ObjectKey, ObjectRepo, OutboxIndex, UserIndex,
+    uuidgen, ContextIndex, CryptoRepo, IriIndex, ObjectKey, ObjectRepo, OutboxIndex, UserIndex,
 };
 use crate::config::RuntimeConfig;
 use crate::feed_slurp::FeedSlurpMsg;
@@ -78,9 +80,23 @@ async fn get_actor(
 ) -> Result<Json<Value>, StatusCode> {
     spawn_blocking(move || {
         let user_index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
+        let crypto_repo = CryptoRepo::new(config.keyspace.clone()).map_err(ise)?;
         if let Some(object) = user_index.find_one(&uid).map_err(ise)? {
             let raw_actor = Actor::from(object);
-            let actor = raw_actor.enrich_with(&config.init.activity_pub);
+            let private_key_bytes = crypto_repo
+                .find_one(&uid)
+                .map_err(ise)?
+                .context("")
+                .map_err(ise)?;
+            let private_key = PrivateDecryptingKey::from_pkcs8(&private_key_bytes)
+                .context("")
+                .map_err(ise)?;
+            let pub_key = private_key
+                .public_key()
+                .as_der()
+                .context("failed to serialize public key")
+                .map_err(ise)?;
+            let actor = raw_actor.enrich_with(&config.init.activity_pub, pub_key.as_ref());
             return Ok(Json(actor.into()));
         }
         Err(StatusCode::NOT_FOUND)
@@ -197,8 +213,18 @@ async fn get_object_likes_shares(
 async fn post_actor(Path(uid): Path<String>, Json(value): Json<Value>) -> Result<(), StatusCode> {
     let object = Object::from(value);
     if object.type_is("Person") {
+        let key_bytes = {
+            let private_key = PrivateDecryptingKey::generate(KeySize::Rsa2048)
+                .context("generate private key failed")
+                .map_err(ise)?;
+            let private_key_der = private_key
+                .as_der()
+                .context("failed to serialize private key")
+                .map_err(ise)?;
+            private_key_der.as_ref().into()
+        };
         let client = get_raft_local_client().map_err(ise)?;
-        let command = ActivityPubCommand::UpdateUser(uid, object);
+        let command = ActivityPubCommand::UpdateUser(uid, object, key_bytes);
         ractor::call!(
             client,
             RaftClientMsg::ClientRequest,

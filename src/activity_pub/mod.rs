@@ -9,6 +9,7 @@ pub(crate) mod machine;
 pub(crate) mod model;
 
 pub(crate) use repo::ContextIndex;
+pub(crate) use repo::CryptoRepo;
 pub(crate) use repo::IriIndex;
 pub(crate) use repo::OutboxIndex;
 pub(crate) use repo::UserIndex;

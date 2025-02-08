@@ -53,3 +53,7 @@ Optionally index by actor id?
 * <https://github.com/rabbitmq/ra/blob/main/docs/internals/INTERNALS.md>
 * <https://eli.thegreenplace.net/2020/implementing-raft-part-2-commands-and-log-replication/>
 * <https://www.w3.org/wiki/ActivityPub/Primer>
+* <https://swicg.github.io/activitypub-http-signature/>
+* <https://datatracker.ietf.org/doc/html/draft-cavage-http-signatures>
+* <https://www.rfc-editor.org/rfc/rfc9421>
+* <https://stackoverflow.com/questions/75351338/pkcs1-vs-pkcs8-vs-pkcs12-for-rsa-keys>

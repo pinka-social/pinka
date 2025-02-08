@@ -9,7 +9,7 @@ use uuid::Bytes;
 use crate::raft::{get_raft_applied, ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg};
 
 use super::model::{Actor as AsActor, Create, Object, Update};
-use super::repo::{ContextIndex, OutboxIndex};
+use super::repo::{ContextIndex, CryptoRepo, OutboxIndex};
 use super::simple_queue::SimpleQueue;
 use super::{IriIndex, ObjectKey, ObjectRepo, UserIndex};
 
@@ -22,6 +22,7 @@ pub(crate) struct State {
     ctx_index: ContextIndex,
     iri_index: IriIndex,
     obj_repo: ObjectRepo,
+    crypto_repo: CryptoRepo,
     queue: SimpleQueue,
 }
 
@@ -46,6 +47,7 @@ impl Actor for ActivityPubMachine {
             let ctx_index = ContextIndex::new(keyspace.clone())?;
             let iri_index = IriIndex::new(keyspace.clone())?;
             let obj_repo = ObjectRepo::new(keyspace.clone())?;
+            let crypto_repo = CryptoRepo::new(keyspace.clone())?;
             let queue = SimpleQueue::new(keyspace.clone())?;
             Ok(State {
                 keyspace,
@@ -54,6 +56,7 @@ impl Actor for ActivityPubMachine {
                 ctx_index,
                 iri_index,
                 obj_repo,
+                crypto_repo,
                 queue,
             })
         })
@@ -89,7 +92,7 @@ impl Actor for ActivityPubMachine {
 #[derive(Debug, Encode, Decode)]
 pub(crate) enum ActivityPubCommand {
     #[n(0)]
-    UpdateUser(#[n(0)] String, #[n(1)] Object<'static>),
+    UpdateUser(#[n(0)] String, #[n(1)] Object<'static>, #[n(2)] Vec<u8>),
     /// Client to Server - Create Activity
     #[n(1)]
     C2sCreate(#[n(0)] C2sCommand),
@@ -162,8 +165,8 @@ impl State {
         info!(target: "apub", ?command, "received command");
 
         match command {
-            ActivityPubCommand::UpdateUser(uid, node_value) => {
-                self.handle_new_user(uid, node_value).await?;
+            ActivityPubCommand::UpdateUser(uid, object, key_pair) => {
+                self.handle_update_user(uid, object, key_pair).await?;
             }
             ActivityPubCommand::C2sCreate(cmd) => {
                 self.handle_c2s_create(cmd).await?;
@@ -216,14 +219,21 @@ impl State {
 
         Ok(ClientResult::ok())
     }
-    async fn handle_new_user(&mut self, uid: String, object: Object<'static>) -> Result<()> {
+    async fn handle_update_user(
+        &mut self,
+        uid: String,
+        object: Object<'static>,
+        key_pair: Vec<u8>,
+    ) -> Result<()> {
         let user = AsActor::from(object);
         let keyspace = self.keyspace.clone();
         let user_index = self.user_index.clone();
+        let crypto_repo = self.crypto_repo.clone();
 
         spawn_blocking(move || -> Result<()> {
             let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
             user_index.insert(&mut b, &uid, user)?;
+            crypto_repo.insert(&mut b, &uid, &key_pair)?;
             b.commit()?;
             Ok(())
         })
