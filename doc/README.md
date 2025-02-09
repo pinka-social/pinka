@@ -57,3 +57,6 @@ Optionally index by actor id?
 * <https://datatracker.ietf.org/doc/html/draft-cavage-http-signatures>
 * <https://www.rfc-editor.org/rfc/rfc9421>
 * <https://stackoverflow.com/questions/75351338/pkcs1-vs-pkcs8-vs-pkcs12-for-rsa-keys>
+* <https://docs.joinmastodon.org/spec/webfinger/>
+* <https://datatracker.ietf.org/doc/html/rfc7033>
+* <https://datatracker.ietf.org/doc/html/rfc7565>

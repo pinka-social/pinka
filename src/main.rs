@@ -136,6 +136,7 @@ async fn main() -> Result<()> {
         },
         activity_pub: ActivityPubConfig {
             base_url: "http://localhost:7001".into(),
+            webfinger_at_host: "@kanru.info".into(),
         },
         feed_slurp: FeedSlurpConfig {},
     };

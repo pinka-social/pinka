@@ -73,9 +73,9 @@ pub(crate) struct DatabaseConfig {
 }
 
 #[derive(Clone, Default, Debug, Deserialize)]
-#[serde(default)]
 pub(crate) struct ActivityPubConfig {
     pub(crate) base_url: String,
+    pub(crate) webfinger_at_host: String,
 }
 
 #[derive(Clone, Default, Debug, Deserialize)]
