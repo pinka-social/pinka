@@ -466,21 +466,19 @@ impl RaftState {
             voted_for: self.voted_for.clone(),
             last_applied: self.last_applied,
         };
-        let keyspace = self.config.keyspace.clone();
+        let mut batch = self
+            .config
+            .keyspace
+            .batch()
+            .durability(Some(PersistMode::SyncAll));
         let restore = self.restore.clone();
         spawn_blocking(move || {
             saved
                 .to_bytes()
                 .context("Failed to serialize raft_saved state")
                 .and_then(|value| {
-                    restore
-                        .insert("raft_saved", value.as_slice())
-                        .context("Failed to update raft_saved state")
-                })
-                .and_then(|_| {
-                    keyspace
-                        .persist(PersistMode::SyncAll)
-                        .context("Failed to persist change")
+                    batch.insert(&restore, "raft_saved", value.as_slice());
+                    batch.commit().context("Failed to persist change")
                 })
         })
         .await??;
