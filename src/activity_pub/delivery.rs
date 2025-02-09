@@ -1,12 +1,11 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use aws_lc_rs::rsa::KeyPair;
 use minicbor::{Decode, Encode};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
-use rustls_pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::task::{spawn_blocking, JoinSet};
-use tokio_rustls::rustls::crypto::CryptoProvider;
 use tracing::{error, warn};
 
 use crate::activity_pub::uuidgen;
@@ -127,15 +126,13 @@ impl DeliveryWorkerState {
         let message = result.message;
         let item = DeliveryQueueItem::from_bytes(&message.body)?;
 
+        // Load signing key
         let uid = item.uid.clone();
         let crypto_repo = self.crypto_repo.clone();
         let Some(private_key_bytes) = spawn_blocking(move || crypto_repo.find_one(&uid)).await??
         else {
             return Ok(false);
         };
-        let key_der = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(private_key_bytes));
-        let crypto = CryptoProvider::get_default().expect("should have a default crypto provider");
-        let signing_key = crypto.key_provider.load_private_key(key_der)?;
 
         let obj_repo = self.obj_repo.clone();
         if let Some(object) = spawn_blocking(move || obj_repo.find_one(item.act_key)).await?? {
@@ -153,11 +150,11 @@ impl DeliveryWorkerState {
             // Collect recipients
             let mut recipients = vec![];
             for target in ["to", "bto", "cc", "bcc", "audience"] {
-                if let Some(iri_array) = object.get_str_array(&target) {
+                if let Some(iri_array) = object.get_str_array(target) {
                     iri_array.iter().for_each(|&iri| recipients.push(iri));
                     continue;
                 }
-                if let Some(iri) = object.get_node_iri(&target) {
+                if let Some(iri) = object.get_node_iri(target) {
                     recipients.push(iri);
                 }
             }
@@ -194,12 +191,11 @@ impl DeliveryWorkerState {
             for inbox in inboxes {
                 let body = object.to_string();
                 let actor_iri = actor_iri.to_string();
-                let signing_key = signing_key.clone();
+                let key_pair = KeyPair::from_pkcs8(&private_key_bytes)?;
                 let mailman = self.mailman.clone();
                 join_set.spawn(async move {
-                    let headers =
-                        hs2019::post_headers(&actor_iri, &inbox, &body, signing_key.as_ref())
-                            .expect("unable to sign");
+                    let headers = hs2019::post_headers(&actor_iri, &inbox, &body, &key_pair)
+                        .expect("unable to sign");
                     mailman.post(&inbox, headers, &body).await
                 });
             }

@@ -9,6 +9,7 @@ pub(crate) mod delivery;
 pub(crate) mod machine;
 pub(crate) mod model;
 
+pub(crate) use hs2019::validate_request;
 pub(crate) use repo::ContextIndex;
 pub(crate) use repo::CryptoRepo;
 pub(crate) use repo::IriIndex;

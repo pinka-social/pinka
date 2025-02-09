@@ -47,7 +47,7 @@ impl Mailman {
         info!(target: "apub", ?headers, "simulate mailman posting to {inbox}");
         let _ = self
             .client
-            .post("http://localhost:9999")
+            .post(inbox)
             .headers(headers)
             .body(body.to_string())
             .send()

@@ -12,10 +12,10 @@ aws-lc-rs = "1.12.2"
 axum = "0.8.1"
 base64ct = { version = "1.6.0", features = ["alloc"] }
 bimap = "0.6.3"
+const-oid = { version = "0.9.6", features = ["db"] }
 fd-lock = "4.0.2"
 feed-rs = "2.3.1"
 fjall = "2.4"
-futures = "0.3.31"
 jiff = "0.1.26"
 minicbor = { version = "0.25.1", features = ["derive", "alloc"] }
 pem-rfc7468 = { version = "0.7.0", features = ["alloc"] }
@@ -23,11 +23,10 @@ ractor = { version = "0.14.6", features = ["cluster"] }
 ractor_cluster = { version = "0.14.6" }
 rand = "0.8.5"
 reqwest = { version = "0.12.12", features = ["gzip", "json"] }
-rustls-pki-types = { version = "1.10.1", features = ["std"] }
-rustls-platform-verifier = "0.5.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10.8"
+spki = "0.7.3"
 tokio = { version = "1.42", features = [
     "fs",
     "macros",

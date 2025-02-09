@@ -74,7 +74,7 @@ impl FeedSlurpWorkerState {
         };
         let client = get_raft_local_client()?;
         for entry in feed.entries.iter().rev() {
-            let object = object_from_feed_entry(&self.apub.base_url, &uid, &entry);
+            let object = object_from_feed_entry(&self.apub.base_url, uid, entry);
             let act_key = ObjectKey::new();
             let obj_key = ObjectKey::new();
             let command = ActivityPubCommand::C2sCreate(C2sCommand {
@@ -131,11 +131,9 @@ fn object_from_feed_entry(base_url: &str, uid: &str, entry: &Entry) -> Object<'s
 
     if let Some(summary) = &entry.summary {
         content.push_str(&summary.content);
-    } else {
-        if let Some(entry_content) = &entry.content {
-            if let Some(body) = &entry_content.body {
-                content.push_str(body);
-            }
+    } else if let Some(entry_content) = &entry.content {
+        if let Some(body) = &entry_content.body {
+            content.push_str(body);
         }
     }
 

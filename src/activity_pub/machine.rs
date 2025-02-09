@@ -93,7 +93,11 @@ impl Actor for ActivityPubMachine {
 #[derive(Debug, Encode, Decode)]
 pub(crate) enum ActivityPubCommand {
     #[n(0)]
-    UpdateUser(#[n(0)] String, #[n(1)] Object<'static>, #[n(2)] Vec<u8>),
+    UpdateUser(
+        #[n(0)] String,
+        #[n(1)] Object<'static>,
+        #[n(2)] Option<Vec<u8>>,
+    ),
     /// Client to Server - Create Activity
     #[n(1)]
     C2sCreate(#[n(0)] C2sCommand),
@@ -224,7 +228,7 @@ impl State {
         &mut self,
         uid: String,
         object: Object<'static>,
-        key_pair: Vec<u8>,
+        key_pair: Option<Vec<u8>>,
     ) -> Result<()> {
         let user = AsActor::from(object);
         let keyspace = self.keyspace.clone();
@@ -234,7 +238,9 @@ impl State {
         spawn_blocking(move || -> Result<()> {
             let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
             user_index.insert(&mut b, &uid, user)?;
-            crypto_repo.insert(&mut b, &uid, &key_pair)?;
+            if let Some(key_pair) = key_pair {
+                crypto_repo.insert(&mut b, &uid, &key_pair)?;
+            }
             b.commit()?;
             Ok(())
         })

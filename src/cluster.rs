@@ -9,8 +9,8 @@ use ractor_cluster::node::{NodeConnectionMode, NodeServerSessionInformation};
 use ractor_cluster::{
     IncomingEncryptionMode, NodeEventSubscription, NodeServer, NodeServerMessage, RactorMessage,
 };
-use rustls_pki_types::pem::PemObject;
-use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+use tokio_rustls::rustls::pki_types::pem::PemObject;
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::server::WebPkiClientVerifier;
 use tokio_rustls::rustls::{
     ClientConfig as TlsClientConfig, RootCertStore, ServerConfig as TlsServerConfig,
