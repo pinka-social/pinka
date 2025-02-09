@@ -61,7 +61,7 @@ impl Default for HttpConfig {
     fn default() -> Self {
         Self {
             listen: true,
-            port: 80,
+            port: 8080,
         }
     }
 }

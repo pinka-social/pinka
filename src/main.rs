@@ -9,7 +9,7 @@ mod raft;
 mod repl;
 mod supervisor;
 
-use std::fs::File;
+use std::fs::{self, File};
 use std::process::exit;
 
 use anyhow::Result;
@@ -19,10 +19,7 @@ use ractor::Actor;
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{error, info};
 
-use self::config::{
-    ActivityPubConfig, ClusterConfig, Config, DatabaseConfig, FeedSlurpConfig, HttpConfig,
-    ManholeConfig, RaftConfig, ReplConfig, RuntimeConfig, ServerConfig,
-};
+use self::config::{ActivityPubConfig, Config, FeedSlurpConfig, ReplConfig, RuntimeConfig};
 use self::flags::{Dump, Pinka, PinkaCmd, RaftCmd, Serve};
 use self::raft::{LogEntry, RaftSerDe};
 use self::supervisor::Supervisor;
@@ -33,113 +30,8 @@ async fn main() -> Result<()> {
 
     let flags = Pinka::from_env_or_exit();
 
-    let config = Config {
-        raft: RaftConfig {
-            heartbeat_ms: 250,
-            min_election_ms: 500,
-            max_election_ms: 1000,
-        },
-        cluster: ClusterConfig {
-            auth_cookie: "foobar".to_string(),
-            use_mtls: false,
-            pem_dir: Some("devcerts".into()),
-            ca_certs: vec!["ca_cert.pem".into()],
-            servers: vec![
-                ServerConfig {
-                    name: "s1".into(),
-                    hostname: "localhost".into(),
-                    port: 8001,
-                    server_cert_chain: vec!["s1.pem".into()],
-                    server_key: Some("s1.key".into()),
-                    client_cert_chain: vec!["s1.pem".into()],
-                    client_key: Some("s1.key".into()),
-                    http: HttpConfig {
-                        listen: true,
-                        port: 7001,
-                    },
-                    ..Default::default()
-                },
-                ServerConfig {
-                    name: "s2".into(),
-                    hostname: "localhost".into(),
-                    port: 8002,
-                    server_cert_chain: vec!["s2.pem".into()],
-                    server_key: Some("s2.key".into()),
-                    client_cert_chain: vec!["s2.pem".into()],
-                    client_key: Some("s2.key".into()),
-                    http: HttpConfig {
-                        listen: true,
-                        port: 7002,
-                    },
-                    ..Default::default()
-                },
-                ServerConfig {
-                    name: "s3".into(),
-                    hostname: "localhost".into(),
-                    port: 8003,
-                    server_cert_chain: vec!["s3.pem".into()],
-                    server_key: Some("s3.key".into()),
-                    client_cert_chain: vec!["s3.pem".into()],
-                    client_key: Some("s3.key".into()),
-                    http: HttpConfig {
-                        listen: true,
-                        port: 7003,
-                    },
-                    ..Default::default()
-                },
-                ServerConfig {
-                    name: "s4".into(),
-                    hostname: "localhost".into(),
-                    port: 8004,
-                    readonly_replica: true,
-                    server_cert_chain: vec!["s4.pem".into()],
-                    server_key: Some("s4.key".into()),
-                    client_cert_chain: vec!["s4.pem".into()],
-                    client_key: Some("s4.key".into()),
-                    http: HttpConfig {
-                        listen: true,
-                        port: 7004,
-                    },
-                    ..Default::default()
-                },
-            ],
-            manholes: vec![
-                ManholeConfig {
-                    server_name: "s1".into(),
-                    auth_cookie: "".into(),
-                    port: 9001,
-                    enable: true,
-                },
-                ManholeConfig {
-                    server_name: "s2".into(),
-                    auth_cookie: "".into(),
-                    port: 9002,
-                    enable: true,
-                },
-                ManholeConfig {
-                    server_name: "s3".into(),
-                    auth_cookie: "".into(),
-                    port: 9003,
-                    enable: true,
-                },
-                ManholeConfig {
-                    server_name: "s4".into(),
-                    auth_cookie: "".into(),
-                    port: 9004,
-                    enable: true,
-                },
-            ],
-            reconnect_timeout_ms: 10_000,
-        },
-        database: DatabaseConfig {
-            path: "devdb".into(),
-        },
-        activity_pub: ActivityPubConfig {
-            base_url: "http://localhost:7001".into(),
-            webfinger_at_host: "@kanru.info".into(),
-        },
-        feed_slurp: FeedSlurpConfig {},
-    };
+    let config_text = fs::read_to_string(flags.config)?;
+    let config: Config = toml::from_str(&config_text)?;
 
     if config.cluster.servers.len() < flags.server.unwrap_or_default() {
         eprintln!(

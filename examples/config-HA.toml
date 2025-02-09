@@ -1,0 +1,65 @@
+[raft]
+heartbeat_ms = 250
+min_election_ms = 500
+max_election_ms = 1000
+
+[cluster]
+auth_cookie = "K89dI7ni8rTTaGoooWhWX"
+use_mtls = true
+pem_dir = "devcerts"
+ca_certs = ["ca_cert.pem"]
+reconnect_timeout_ms = 10_000
+
+[[cluster.servers]]
+name = "s1"
+hostname = "localhost"
+port = 8001
+server_cert_chain = ["s1.pem"]
+server_key = "s1.key"
+client_cert_chain = ["s1.pem"]
+client_key = "s1.key"
+http.listen = true
+http.port = 7001
+
+[[cluster.servers]]
+name = "s2"
+hostname = "localhost"
+port = 8002
+server_cert_chain = ["s2.pem"]
+server_key = "s2.key"
+client_cert_chain = ["s2.pem"]
+client_key = "s2.key"
+http.listen = true
+http.port = 7002
+
+[[cluster.servers]]
+name = "s3"
+hostname = "localhost"
+port = 8003
+server_cert_chain = ["s3.pem"]
+server_key = "s3.key"
+client_cert_chain = ["s3.pem"]
+client_key = "s3.key"
+http.listen = true
+http.port = 7003
+
+[[cluster.servers]]
+name = "s4"
+hostname = "localhost"
+port = 8004
+readonly_replica = true        # read replica!
+server_cert_chain = ["s4.pem"]
+server_key = "s4.key"
+client_cert_chain = ["s4.pem"]
+client_key = "s4.key"
+http.listen = true
+http.port = 7004
+
+[database]
+path = "devdb"
+
+[activity_pub]
+base_url = "http://localhost:7001" # without trailing slash
+webfinger_at_host = "@localhost"
+
+[feed_slurp]
