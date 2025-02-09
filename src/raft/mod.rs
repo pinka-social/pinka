@@ -553,7 +553,7 @@ impl RaftState {
     }
 
     fn set_election_timer(&mut self) {
-        let duration = Duration::from_millis(rand::thread_rng().gen_range(
+        let duration = Duration::from_millis(rand::rng().random_range(
             self.config.init.raft.min_election_ms..=self.config.init.raft.max_election_ms,
         ));
 
