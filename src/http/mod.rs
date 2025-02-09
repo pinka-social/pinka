@@ -6,6 +6,7 @@ use aws_lc_rs::rsa::{KeySize, PrivateDecryptingKey};
 use axum::extract::{Path, Query, State};
 use axum::http::{Method, StatusCode, Uri};
 use axum::middleware::from_fn;
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use pem_rfc7468::{encode_string as pem_encode, LineEnding};
@@ -64,6 +65,7 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
         return Ok(());
     }
     let app = Router::new()
+        .route("/.well-known/webfinger", get(get_webfinger))
         .route("/users/{id}", get(get_actor).post(post_actor))
         .route("/users/{id}/outbox", get(get_outbox).post(post_outbox))
         .route(
@@ -179,6 +181,50 @@ async fn get_object_likes_shares(
             "type": "Collection",
             "totalItems": count
         })))
+    })
+    .await
+    .context("task failed")
+    .map_err(ise)?
+}
+
+#[derive(Deserialize)]
+struct WebFingerParams {
+    resource: String,
+}
+
+async fn get_webfinger(
+    State(config): State<RuntimeConfig>,
+    Query(params): Query<WebFingerParams>,
+) -> Result<impl IntoResponse, StatusCode> {
+    spawn_blocking(move || {
+        if !params.resource.starts_with("acct:") {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        let subject = params.resource.strip_prefix("acct:").unwrap();
+        let Some(uid) = subject.strip_suffix(&config.init.activity_pub.webfinger_at_host) else {
+            return Err(StatusCode::BAD_REQUEST);
+        };
+        let user_index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
+        if user_index.find_one(&uid).map_err(ise)?.is_some() {
+            let jrd = json!({
+                "subject": subject,
+                "links": [
+                    {
+                        "rel": "self",
+                        "type": "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"",
+                        "href": format!("{}/users/{}", config.init.activity_pub.base_url, uid)
+                    }
+                ]
+            });
+            return Ok((
+                [
+                    ("content-type", "application/jrd+json"),
+                    ("access-control-allow-origin", "*"),
+                ],
+                Json(jrd),
+            ));
+        }
+        Err(StatusCode::NOT_FOUND)
     })
     .await
     .context("task failed")

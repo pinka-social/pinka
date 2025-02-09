@@ -21,7 +21,10 @@ impl Actor<'_> {
 
         // TODO: correctly update @context
         let Value::Object(properties) = json!({
-            "@context": "https://www.w3.org/ns/activitystreams",
+            "@context": [
+                "https://www.w3.org/ns/activitystreams",
+                "https://w3id.org/security/v1"
+            ],
             "type": "Person",
             "id": format!("{}/users/{}", base_url, id),
             "followers": format!("{}/users/{}/followers", base_url, id),
@@ -58,6 +61,7 @@ mod tests {
     fn enrich_actor() -> Result<()> {
         let config = ActivityPubConfig {
             base_url: "https://social.example.com".to_string(),
+            webfinger_at_host: "@social.example.com".to_string(),
         };
         let object = Object::try_from(json!({
             "id": "john",
@@ -72,7 +76,10 @@ mod tests {
         assert_eq!(
             actor,
             Actor(Object::from(&json!({
-                "@context": "https://www.w3.org/ns/activitystreams",
+                "@context": [
+                    "https://www.w3.org/ns/activitystreams",
+                    "https://w3id.org/security/v1"
+                ],
                 "type": "Person",
                 "id": "https://social.example.com/users/john",
                 "name": "John Smith",
