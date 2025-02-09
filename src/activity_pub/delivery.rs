@@ -5,6 +5,7 @@ use aws_lc_rs::rsa::KeyPair;
 use minicbor::{Decode, Encode};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
+use secrecy::ExposeSecret;
 use tokio::task::{spawn_blocking, JoinSet};
 use tracing::{error, warn};
 
@@ -129,8 +130,7 @@ impl DeliveryWorkerState {
         // Load signing key
         let uid = item.uid.clone();
         let crypto_repo = self.crypto_repo.clone();
-        let Some(private_key_bytes) = spawn_blocking(move || crypto_repo.find_one(&uid)).await??
-        else {
+        let Some(key_material) = spawn_blocking(move || crypto_repo.find_one(&uid)).await?? else {
             return Ok(false);
         };
 
@@ -191,7 +191,7 @@ impl DeliveryWorkerState {
             for inbox in inboxes {
                 let body = object.to_string();
                 let actor_iri = actor_iri.to_string();
-                let key_pair = KeyPair::from_pkcs8(&private_key_bytes)?;
+                let key_pair = KeyPair::from_pkcs8(key_material.expose_secret())?;
                 let mailman = self.mailman.clone();
                 join_set.spawn(async move {
                     let headers = hs2019::post_headers(&actor_iri, &inbox, &body, &key_pair)

@@ -10,7 +10,7 @@ use crate::raft::{get_raft_applied, ClientResult, LogEntryValue, RaftAppliedMsg,
 
 use super::delivery::DeliveryQueueItem;
 use super::model::{Actor as AsActor, Create, Object, Update};
-use super::repo::{ContextIndex, CryptoRepo, OutboxIndex};
+use super::repo::{ContextIndex, CryptoRepo, KeyMaterial, OutboxIndex};
 use super::simple_queue::SimpleQueue;
 use super::{IriIndex, ObjectKey, ObjectRepo, UserIndex};
 
@@ -96,7 +96,7 @@ pub(crate) enum ActivityPubCommand {
     UpdateUser(
         #[n(0)] String,
         #[n(1)] Object<'static>,
-        #[n(2)] Option<Vec<u8>>,
+        #[n(2)] Option<KeyMaterial>,
     ),
     /// Client to Server - Create Activity
     #[n(1)]
@@ -170,8 +170,8 @@ impl State {
         info!(target: "apub", ?command, "received command");
 
         match command {
-            ActivityPubCommand::UpdateUser(uid, object, key_pair) => {
-                self.handle_update_user(uid, object, key_pair).await?;
+            ActivityPubCommand::UpdateUser(uid, object, key_material) => {
+                self.handle_update_user(uid, object, key_material).await?;
             }
             ActivityPubCommand::C2sCreate(cmd) => {
                 self.handle_c2s_create(cmd).await?;
@@ -228,7 +228,7 @@ impl State {
         &mut self,
         uid: String,
         object: Object<'static>,
-        key_pair: Option<Vec<u8>>,
+        key_material: Option<KeyMaterial>,
     ) -> Result<()> {
         let user = AsActor::from(object);
         let keyspace = self.keyspace.clone();
@@ -238,7 +238,7 @@ impl State {
         spawn_blocking(move || -> Result<()> {
             let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
             user_index.insert(&mut b, &uid, user)?;
-            if let Some(key_pair) = key_pair {
+            if let Some(key_pair) = key_material {
                 crypto_repo.insert(&mut b, &uid, &key_pair)?;
             }
             b.commit()?;

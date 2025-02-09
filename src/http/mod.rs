@@ -11,6 +11,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use pem_rfc7468::{encode_string as pem_encode, LineEnding};
 use ractor::ActorRef;
+use secrecy::ExposeSecret;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
@@ -22,8 +23,8 @@ use crate::activity_pub::delivery::DeliveryQueueItem;
 use crate::activity_pub::machine::{ActivityPubCommand, C2sCommand, S2sCommand};
 use crate::activity_pub::model::{Actor, Collection, Create, Object};
 use crate::activity_pub::{
-    uuidgen, validate_request, ContextIndex, CryptoRepo, IriIndex, ObjectKey, ObjectRepo,
-    OutboxIndex, UserIndex,
+    uuidgen, validate_request, ContextIndex, CryptoRepo, IriIndex, KeyMaterial, ObjectKey,
+    ObjectRepo, OutboxIndex, UserIndex,
 };
 use crate::config::RuntimeConfig;
 use crate::feed_slurp::FeedSlurpMsg;
@@ -241,12 +242,12 @@ async fn get_actor(
         if let Some(object) = user_index.find_one(&uid).map_err(ise)? {
             let raw_actor = Actor::from(object);
             // TODO store public key separately?
-            let private_key_bytes = crypto_repo
+            let key_material = crypto_repo
                 .find_one(&uid)
                 .map_err(ise)?
                 .context("")
                 .map_err(ise)?;
-            let private_key = PrivateDecryptingKey::from_pkcs8(&private_key_bytes)
+            let private_key = PrivateDecryptingKey::from_pkcs8(key_material.expose_secret())
                 .context("")
                 .map_err(ise)?;
             let pub_key = private_key
@@ -289,7 +290,7 @@ async fn post_actor(
                     .as_der()
                     .context("failed to serialize private key")
                     .map_err(ise)?;
-                Some(private_key_der.as_ref().into())
+                Some(KeyMaterial::from(private_key_der.as_ref().to_vec()))
             } else {
                 None
             }
