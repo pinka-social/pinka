@@ -1,6 +1,7 @@
 //! Storage friendly presentation of Activity Streams' core data model.
 
 use std::borrow::Cow;
+use std::fmt::Display;
 
 use serde_json::{Map, Value};
 
@@ -185,6 +186,12 @@ impl From<Object<'_>> for Value {
 impl AsRef<Value> for Object<'_> {
     fn as_ref(&self) -> &Value {
         &self.0
+    }
+}
+
+impl Display for Object<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
     }
 }
 

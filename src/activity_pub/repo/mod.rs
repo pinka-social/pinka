@@ -1,4 +1,5 @@
 mod context_index;
+mod crypto_repo;
 mod iri_index;
 mod object_repo;
 mod outbox_index;
@@ -7,6 +8,7 @@ mod xindex;
 mod xkey;
 
 pub(crate) use context_index::ContextIndex;
+pub(crate) use crypto_repo::CryptoRepo;
 pub(crate) use iri_index::IriIndex;
 pub(crate) use object_repo::ObjectRepo;
 pub(crate) use outbox_index::OutboxIndex;

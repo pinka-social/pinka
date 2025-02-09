@@ -1,10 +1,14 @@
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
+use aws_lc_rs::encoding::AsDer;
+use aws_lc_rs::rsa::{KeySize, PrivateDecryptingKey};
 use axum::extract::{Path, Query, State};
 use axum::http::{Method, StatusCode, Uri};
+use axum::middleware::from_fn;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use pem_rfc7468::{encode_string as pem_encode, LineEnding};
 use ractor::ActorRef;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -13,10 +17,12 @@ use tokio::task::spawn_blocking;
 use tracing::info;
 use uuid::Uuid;
 
+use crate::activity_pub::delivery::DeliveryQueueItem;
 use crate::activity_pub::machine::{ActivityPubCommand, C2sCommand, S2sCommand};
 use crate::activity_pub::model::{Actor, Collection, Create, Object};
 use crate::activity_pub::{
-    uuidgen, ContextIndex, IriIndex, ObjectKey, ObjectRepo, OutboxIndex, UserIndex,
+    uuidgen, validate_request, ContextIndex, CryptoRepo, IriIndex, ObjectKey, ObjectRepo,
+    OutboxIndex, UserIndex,
 };
 use crate::config::RuntimeConfig;
 use crate::feed_slurp::FeedSlurpMsg;
@@ -60,7 +66,10 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
     let app = Router::new()
         .route("/users/{id}", get(get_actor).post(post_actor))
         .route("/users/{id}/outbox", get(get_outbox).post(post_outbox))
-        .route("/users/{id}/inbox", post(post_inbox))
+        .route(
+            "/users/{id}/inbox",
+            post(post_inbox).layer(from_fn(validate_request)),
+        )
         .route("/users/{id}/followers", get(get_followers))
         .route("/as/objects/{obj_key}", get(get_object_by_id))
         .route("/as/objects/{obj_key}/{prop}", get(get_object_likes_shares))
@@ -70,24 +79,6 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
     let listener = TcpListener::bind(format!("0.0.0.0:{}", config.server.http.port)).await?;
     axum::serve(listener, app).await?;
     Ok(())
-}
-
-async fn get_actor(
-    State(config): State<RuntimeConfig>,
-    Path(uid): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
-    spawn_blocking(move || {
-        let user_index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
-        if let Some(object) = user_index.find_one(&uid).map_err(ise)? {
-            let raw_actor = Actor::from(object);
-            let actor = raw_actor.enrich_with(&config.init.activity_pub);
-            return Ok(Json(actor.into()));
-        }
-        Err(StatusCode::NOT_FOUND)
-    })
-    .await
-    .context("task failed")
-    .map_err(ise)?
 }
 
 async fn get_object_by_id(
@@ -194,11 +185,71 @@ async fn get_object_likes_shares(
     .map_err(ise)?
 }
 
-async fn post_actor(Path(uid): Path<String>, Json(value): Json<Value>) -> Result<(), StatusCode> {
+async fn get_actor(
+    State(config): State<RuntimeConfig>,
+    Path(uid): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    spawn_blocking(move || {
+        let user_index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
+        let crypto_repo = CryptoRepo::new(config.keyspace.clone()).map_err(ise)?;
+        if let Some(object) = user_index.find_one(&uid).map_err(ise)? {
+            let raw_actor = Actor::from(object);
+            // TODO store public key separately?
+            let private_key_bytes = crypto_repo
+                .find_one(&uid)
+                .map_err(ise)?
+                .context("")
+                .map_err(ise)?;
+            let private_key = PrivateDecryptingKey::from_pkcs8(&private_key_bytes)
+                .context("")
+                .map_err(ise)?;
+            let pub_key = private_key
+                .public_key()
+                .as_der()
+                .context("failed to serialize public key")
+                .map_err(ise)?;
+            // Public key in SubjectPublicKeyInfo format
+            let pem = pem_encode("PUBLIC KEY", LineEnding::LF, pub_key.as_ref())
+                .expect("must encode public key to PEM");
+            let actor = raw_actor.enrich_with(&config.init.activity_pub, &pem);
+            return Ok(Json(actor.into()));
+        }
+        Err(StatusCode::NOT_FOUND)
+    })
+    .await
+    .context("task failed")
+    .map_err(ise)?
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct PostActorParams {
+    gen_rsa: bool,
+}
+
+async fn post_actor(
+    Path(uid): Path<String>,
+    Query(params): Query<PostActorParams>,
+    Json(value): Json<Value>,
+) -> Result<(), StatusCode> {
     let object = Object::from(value);
     if object.type_is("Person") {
+        let key_bytes = {
+            if params.gen_rsa {
+                let private_key = PrivateDecryptingKey::generate(KeySize::Rsa2048)
+                    .context("generate private key failed")
+                    .map_err(ise)?;
+                let private_key_der = private_key
+                    .as_der()
+                    .context("failed to serialize private key")
+                    .map_err(ise)?;
+                Some(private_key_der.as_ref().into())
+            } else {
+                None
+            }
+        };
         let client = get_raft_local_client().map_err(ise)?;
-        let command = ActivityPubCommand::UpdateUser(uid, object);
+        let command = ActivityPubCommand::UpdateUser(uid, object, key_bytes);
         ractor::call!(
             client,
             RaftClientMsg::ClientRequest,
@@ -348,7 +399,7 @@ async fn post_outbox(
             .with_actor(format!("{}/users/{uid}", config.init.activity_pub.base_url));
         let client = get_raft_local_client().map_err(ise)?;
         let scoped_cmd = C2sCommand {
-            uid,
+            uid: uid.clone(),
             act_key,
             obj_key,
             object: Value::from(create).into(),
@@ -361,7 +412,10 @@ async fn post_outbox(
         )
         .context("RPC call failed")
         .map_err(ise)?;
-        let command = ActivityPubCommand::QueueDelivery(uuidgen(), act_key);
+        // XXX: in case of update, the `obj_key` is not used, so this
+        // queue_delivery will be unable to find the item for delivery.
+        let command =
+            ActivityPubCommand::QueueDelivery(uuidgen(), DeliveryQueueItem { uid, act_key });
         ractor::call!(
             client,
             RaftClientMsg::ClientRequest,

@@ -8,8 +8,9 @@ use uuid::Bytes;
 
 use crate::raft::{get_raft_applied, ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg};
 
+use super::delivery::DeliveryQueueItem;
 use super::model::{Actor as AsActor, Create, Object, Update};
-use super::repo::{ContextIndex, OutboxIndex};
+use super::repo::{ContextIndex, CryptoRepo, OutboxIndex};
 use super::simple_queue::SimpleQueue;
 use super::{IriIndex, ObjectKey, ObjectRepo, UserIndex};
 
@@ -22,6 +23,7 @@ pub(crate) struct State {
     ctx_index: ContextIndex,
     iri_index: IriIndex,
     obj_repo: ObjectRepo,
+    crypto_repo: CryptoRepo,
     queue: SimpleQueue,
 }
 
@@ -46,6 +48,7 @@ impl Actor for ActivityPubMachine {
             let ctx_index = ContextIndex::new(keyspace.clone())?;
             let iri_index = IriIndex::new(keyspace.clone())?;
             let obj_repo = ObjectRepo::new(keyspace.clone())?;
+            let crypto_repo = CryptoRepo::new(keyspace.clone())?;
             let queue = SimpleQueue::new(keyspace.clone())?;
             Ok(State {
                 keyspace,
@@ -54,6 +57,7 @@ impl Actor for ActivityPubMachine {
                 ctx_index,
                 iri_index,
                 obj_repo,
+                crypto_repo,
                 queue,
             })
         })
@@ -89,7 +93,11 @@ impl Actor for ActivityPubMachine {
 #[derive(Debug, Encode, Decode)]
 pub(crate) enum ActivityPubCommand {
     #[n(0)]
-    UpdateUser(#[n(0)] String, #[n(1)] Object<'static>),
+    UpdateUser(
+        #[n(0)] String,
+        #[n(1)] Object<'static>,
+        #[n(2)] Option<Vec<u8>>,
+    ),
     /// Client to Server - Create Activity
     #[n(1)]
     C2sCreate(#[n(0)] C2sCommand),
@@ -110,7 +118,7 @@ pub(crate) enum ActivityPubCommand {
     #[n(9)]
     S2sAnnounce(#[n(0)] S2sCommand),
     #[n(10)]
-    QueueDelivery(#[n(0)] Bytes, #[n(1)] ObjectKey),
+    QueueDelivery(#[n(0)] Bytes, #[n(1)] DeliveryQueueItem),
     #[n(11)]
     ReceiveDelivery(#[n(0)] Bytes, #[n(1)] u64, #[n(2)] u64),
     #[n(12)]
@@ -162,8 +170,8 @@ impl State {
         info!(target: "apub", ?command, "received command");
 
         match command {
-            ActivityPubCommand::UpdateUser(uid, node_value) => {
-                self.handle_new_user(uid, node_value).await?;
+            ActivityPubCommand::UpdateUser(uid, object, key_pair) => {
+                self.handle_update_user(uid, object, key_pair).await?;
             }
             ActivityPubCommand::C2sCreate(cmd) => {
                 self.handle_c2s_create(cmd).await?;
@@ -192,9 +200,9 @@ impl State {
             ActivityPubCommand::S2sAnnounce(cmd) => {
                 self.handle_s2s_announce(cmd).await?;
             }
-            ActivityPubCommand::QueueDelivery(key, object_key) => {
+            ActivityPubCommand::QueueDelivery(key, item) => {
                 let queue = self.queue.clone();
-                spawn_blocking(move || queue.send_message(MAILBOX, key, object_key.as_ref()))
+                spawn_blocking(move || queue.send_message(MAILBOX, key, item.to_bytes()?))
                     .await??;
             }
             ActivityPubCommand::ReceiveDelivery(receipt_handle, now, visibility_timeout) => {
@@ -216,14 +224,23 @@ impl State {
 
         Ok(ClientResult::ok())
     }
-    async fn handle_new_user(&mut self, uid: String, object: Object<'static>) -> Result<()> {
+    async fn handle_update_user(
+        &mut self,
+        uid: String,
+        object: Object<'static>,
+        key_pair: Option<Vec<u8>>,
+    ) -> Result<()> {
         let user = AsActor::from(object);
         let keyspace = self.keyspace.clone();
         let user_index = self.user_index.clone();
+        let crypto_repo = self.crypto_repo.clone();
 
         spawn_blocking(move || -> Result<()> {
             let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
             user_index.insert(&mut b, &uid, user)?;
+            if let Some(key_pair) = key_pair {
+                crypto_repo.insert(&mut b, &uid, &key_pair)?;
+            }
             b.commit()?;
             Ok(())
         })

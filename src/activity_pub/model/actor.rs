@@ -15,9 +15,10 @@ impl<'a> From<Object<'a>> for Actor<'a> {
 
 impl Actor<'_> {
     // TODO
-    pub(crate) fn enrich_with(self, config: &ActivityPubConfig) -> Self {
+    pub(crate) fn enrich_with(self, config: &ActivityPubConfig, public_key_pem: &str) -> Self {
         let base_url = &config.base_url;
         let id = self.0.id().expect("Actor should have an IRI id");
+
         // TODO: correctly update @context
         let Value::Object(properties) = json!({
             "@context": "https://www.w3.org/ns/activitystreams",
@@ -26,6 +27,11 @@ impl Actor<'_> {
             "followers": format!("{}/users/{}/followers", base_url, id),
             "inbox": format!("{}/users/{}/inbox", base_url, id),
             "outbox": format!("{}/users/{}/outbox", base_url, id),
+            "publicKey": {
+                "id": format!("{}/users/{}#main-key", base_url, id),
+                "owner": format!("{}/users/{}", base_url, id),
+                "publicKeyPem": public_key_pem
+            }
         }) else {
             unreachable!()
         };
@@ -62,7 +68,7 @@ mod tests {
                 "url": "https://objects.social.example.com/493d7fea0a23.jpg"
             }
         }))?;
-        let actor = Actor::from(object).enrich_with(&config);
+        let actor = Actor::from(object).enrich_with(&config, "PEM");
         assert_eq!(
             actor,
             Actor(Object::from(&json!({
@@ -73,6 +79,11 @@ mod tests {
                 "followers": "https://social.example.com/users/john/followers",
                 "inbox": "https://social.example.com/users/john/inbox",
                 "outbox": "https://social.example.com/users/john/outbox",
+                "publicKey": {
+                    "id": "https://social.example.com/users/john#main-key",
+                    "owner": "https://social.example.com/users/john",
+                    "publicKeyPem": "PEM"
+                },
                 "icon": {
                     "type": "Image",
                     "mediaType": "image/jpeg",

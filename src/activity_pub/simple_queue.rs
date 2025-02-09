@@ -65,7 +65,12 @@ impl SimpleQueue {
             .is_empty()
             .context("unable to read from messages tree")
     }
-    pub(super) fn send_message(&self, queue_name: &str, key: Bytes, body: &[u8]) -> Result<()> {
+    pub(super) fn send_message(
+        &self,
+        queue_name: &str,
+        key: Bytes,
+        body: impl Into<Vec<u8>>,
+    ) -> Result<()> {
         let receipt_handle = key;
 
         let message = QueueMessage {

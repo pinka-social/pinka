@@ -1,11 +1,12 @@
-use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use aws_lc_rs::rsa::KeyPair;
+use minicbor::{Decode, Encode};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
 use tokio::task::{spawn_blocking, JoinSet};
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::activity_pub::uuidgen;
 use crate::raft::{get_raft_local_client, ClientResult, LogEntryValue, RaftClientMsg};
@@ -15,7 +16,7 @@ use super::machine::ActivityPubCommand;
 use super::mailman::Mailman;
 use super::model::Object;
 use super::simple_queue::{ReceiveResult, SimpleQueue};
-use super::ObjectRepo;
+use super::{hs2019, CryptoRepo, ObjectKey, ObjectRepo};
 
 pub(crate) struct DeliveryWorker;
 
@@ -30,6 +31,7 @@ pub(crate) struct DeliveryWorkerInit {
 
 pub(crate) struct DeliveryWorkerState {
     obj_repo: ObjectRepo,
+    crypto_repo: CryptoRepo,
     queue: SimpleQueue,
     mailman: Mailman,
 }
@@ -48,11 +50,13 @@ impl Actor for DeliveryWorker {
         let keyspace = config.keyspace.clone();
         spawn_blocking(move || {
             let obj_repo = ObjectRepo::new(keyspace.clone())?;
+            let crypto_repo = CryptoRepo::new(keyspace.clone())?;
             let queue = SimpleQueue::new(keyspace.clone())?;
             let mailman = Mailman::new();
 
             Ok(DeliveryWorkerState {
                 obj_repo,
+                crypto_repo,
                 queue,
                 mailman,
             })
@@ -76,6 +80,7 @@ impl Actor for DeliveryWorker {
         match message {
             DeliveryWorkerMsg::RunLoop => {
                 match state.handle_delivery().await {
+                    // FIXME use enum
                     Ok(true) => {
                         // There might be more work to do, immediately schedule next loop
                         ractor::cast!(myself, DeliveryWorkerMsg::RunLoop)?;
@@ -119,17 +124,37 @@ impl DeliveryWorkerState {
         }
         let result = ReceiveResult::from_bytes(&bytes)?;
         let message = result.message;
-        let obj_key = message.body;
+        let item = DeliveryQueueItem::from_bytes(&message.body)?;
+
+        // Load signing key
+        let uid = item.uid.clone();
+        let crypto_repo = self.crypto_repo.clone();
+        let Some(private_key_bytes) = spawn_blocking(move || crypto_repo.find_one(&uid)).await??
+        else {
+            return Ok(false);
+        };
+
         let obj_repo = self.obj_repo.clone();
-        if let Some(object) = spawn_blocking(move || obj_repo.find_one(obj_key)).await?? {
+        if let Some(object) = spawn_blocking(move || obj_repo.find_one(item.act_key)).await?? {
+            // Get actor IRI
+            let Some(actor_iri) = object.get_node_iri("actor") else {
+                warn!(target: "apub", ?object, "cannot deliver activity without actor property");
+                let command = ActivityPubCommand::AckDelivery(result.key, receipt_handle);
+                let _ = ractor::call!(
+                    raft_client,
+                    RaftClientMsg::ClientRequest,
+                    LogEntryValue::from(command)
+                )?;
+                return Ok(false);
+            };
             // Collect recipients
             let mut recipients = vec![];
             for target in ["to", "bto", "cc", "bcc", "audience"] {
-                if let Some(iri_array) = object.get_str_array(&target) {
+                if let Some(iri_array) = object.get_str_array(target) {
                     iri_array.iter().for_each(|&iri| recipients.push(iri));
                     continue;
                 }
-                if let Some(iri) = object.get_node_iri(&target) {
+                if let Some(iri) = object.get_node_iri(target) {
                     recipients.push(iri);
                 }
             }
@@ -162,16 +187,24 @@ impl DeliveryWorkerState {
             // TODO
 
             // Deliver
-            let object = Arc::new(object);
             let mut join_set = JoinSet::new();
             for inbox in inboxes {
+                let body = object.to_string();
+                let actor_iri = actor_iri.to_string();
+                let key_pair = KeyPair::from_pkcs8(&private_key_bytes)?;
                 let mailman = self.mailman.clone();
-                let object = object.clone();
-                join_set.spawn(async move { mailman.post(&inbox, object.as_ref()).await });
+                join_set.spawn(async move {
+                    let headers = hs2019::post_headers(&actor_iri, &inbox, &body, &key_pair)
+                        .expect("unable to sign");
+                    mailman.post(&inbox, headers, &body).await
+                });
             }
             join_set.join_all().await;
+        } else {
+            error!(target: "apub", obj_key=%item.act_key, "cannot find object");
         }
         // Ack
+        // TODO always ack in case of unrecoverable error
         let command = ActivityPubCommand::AckDelivery(result.key, receipt_handle);
         let _ = ractor::call!(
             raft_client,
@@ -214,5 +247,22 @@ impl DeliveryWorkerState {
         }
         let result = result_set.join_all().await.into_iter().flatten().collect();
         Ok(result)
+    }
+}
+
+#[derive(Debug, Encode, Decode)]
+pub(crate) struct DeliveryQueueItem {
+    #[n(0)]
+    pub(crate) uid: String,
+    #[n(1)]
+    pub(crate) act_key: ObjectKey,
+}
+
+impl DeliveryQueueItem {
+    pub(crate) fn to_bytes(&self) -> Result<Vec<u8>> {
+        minicbor::to_vec(self).context("failed to encode DeliveryQueueItem")
+    }
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        minicbor::decode(bytes).context("failed to decode DeliveryQueueItem")
     }
 }

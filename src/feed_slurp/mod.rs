@@ -4,6 +4,7 @@ use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
 use serde_json::json;
 
+use crate::activity_pub::delivery::DeliveryQueueItem;
 use crate::activity_pub::machine::{ActivityPubCommand, C2sCommand};
 use crate::activity_pub::model::Object;
 use crate::activity_pub::{uuidgen, ObjectKey};
@@ -73,11 +74,11 @@ impl FeedSlurpWorkerState {
         };
         let client = get_raft_local_client()?;
         for entry in feed.entries.iter().rev() {
-            let object = object_from_feed_entry(&self.apub.base_url, &uid, &entry);
+            let object = object_from_feed_entry(&self.apub.base_url, uid, entry);
             let act_key = ObjectKey::new();
             let obj_key = ObjectKey::new();
             let command = ActivityPubCommand::C2sCreate(C2sCommand {
-                uid: "kanru".to_string(),
+                uid: uid.to_string(),
                 act_key,
                 obj_key,
                 object,
@@ -87,7 +88,13 @@ impl FeedSlurpWorkerState {
                 RaftClientMsg::ClientRequest,
                 LogEntryValue::from(command)
             )?;
-            let command = ActivityPubCommand::QueueDelivery(uuidgen(), act_key);
+            let command = ActivityPubCommand::QueueDelivery(
+                uuidgen(),
+                DeliveryQueueItem {
+                    uid: uid.to_string(),
+                    act_key,
+                },
+            );
             ractor::call!(
                 client,
                 RaftClientMsg::ClientRequest,
@@ -124,11 +131,9 @@ fn object_from_feed_entry(base_url: &str, uid: &str, entry: &Entry) -> Object<'s
 
     if let Some(summary) = &entry.summary {
         content.push_str(&summary.content);
-    } else {
-        if let Some(entry_content) = &entry.content {
-            if let Some(body) = &entry_content.body {
-                content.push_str(body);
-            }
+    } else if let Some(entry_content) = &entry.content {
+        if let Some(body) = &entry_content.body {
+            content.push_str(body);
         }
     }
 
