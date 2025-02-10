@@ -8,7 +8,7 @@ use aws_lc_rs::rsa::KeyPair;
 use aws_lc_rs::signature::{
     UnparsedPublicKey, VerificationAlgorithm, ECDSA_P256K1_SHA256_ASN1, ECDSA_P256K1_SHA256_FIXED,
     ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA256_FIXED, ED25519, RSA_PKCS1_2048_8192_SHA256,
-    RSA_PSS_2048_8192_SHA256, RSA_PSS_SHA256,
+    RSA_PKCS1_SHA256, RSA_PSS_2048_8192_SHA256,
 };
 use axum::body::{Body, Bytes};
 use axum::extract::Request;
@@ -50,7 +50,7 @@ pub(super) fn post_headers(
     let rng = SystemRandom::new();
     let mut rsa_signature = vec![0; key_pair.public_modulus_len()];
     key_pair.sign(
-        &RSA_PSS_SHA256,
+        &RSA_PKCS1_SHA256,
         &rng,
         sig_body.as_bytes(),
         &mut rsa_signature,
@@ -62,7 +62,7 @@ pub(super) fn post_headers(
     headers.insert(header::DATE, date.parse()?);
     headers.insert("Digest", format!("SHA-256={digest}").parse()?);
     headers.insert(header::CONTENT_LENGTH, content_length.to_string().parse()?);
-    headers.insert("Signature", format!("keyId=\"{actor_iri}#main-key\",algorithm=\"hs2019\",headers=\"(request-target) host date digest content-length\",signature=\"{signature}\"").parse()?);
+    headers.insert("Signature", format!("keyId=\"{actor_iri}#main-key\",algorithm=\"rsa-sha256\",headers=\"(request-target) host date digest content-length\",signature=\"{signature}\"").parse()?);
 
     Ok(headers)
 }
