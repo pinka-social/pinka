@@ -23,6 +23,7 @@ use reqwest::header::{self, HeaderMap};
 use reqwest::{StatusCode, Url};
 use sha2::{Digest, Sha256, Sha512};
 use spki::SubjectPublicKeyInfoRef;
+use tracing::warn;
 
 use super::mailman::Mailman;
 use super::model::Object;
@@ -93,9 +94,10 @@ pub(crate) async fn validate_request(
         .to_str()
         .map_err(bad)?;
     let sig_params = parse_sig_params(signature_header).map_err(bad)?;
-    let algorithm = sig_params.get("algorithm");
-    if algorithm.is_some() && algorithm != Some(&"hs2019".to_string()) {
-        return Err(StatusCode::NOT_IMPLEMENTED);
+    if let Some(algorithm) = sig_params.get("algorithm") {
+        if !["hs2019", "rsa-sha256"].contains(&algorithm.as_str()) {
+            warn!(target: "apub", "unknown http signature algorithm {algorithm} used, verification will likely fail");
+        }
     }
     let signature = Base64::decode_vec(sig_params.get("signature").ok_or(StatusCode::BAD_REQUEST)?)
         .map_err(bad)?;
