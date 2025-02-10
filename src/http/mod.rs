@@ -493,16 +493,20 @@ async fn post_outbox(
     Err(StatusCode::BAD_REQUEST)
 }
 
-async fn post_inbox(Path(uid): Path<String>, Json(value): Json<Value>) -> Result<(), StatusCode> {
+async fn post_inbox(
+    State(config): State<RuntimeConfig>,
+    Path(uid): Path<String>,
+    Json(value): Json<Value>,
+) -> Result<(), StatusCode> {
     let object = Object::from(value);
     if object.is_inbox_activity() {
         let client = get_raft_local_client().map_err(ise)?;
         let obj_type = object.get_first_type();
         let obj_type = obj_type.as_deref();
         let scoped_cmd = S2sCommand {
-            uid,
+            uid: uid.clone(),
             obj_key: ObjectKey::new(),
-            object,
+            object: object.clone(),
         };
         let command = match obj_type {
             Some("Create") => ActivityPubCommand::S2sCreate(scoped_cmd),
@@ -522,6 +526,34 @@ async fn post_inbox(Path(uid): Path<String>, Json(value): Json<Value>) -> Result
         )
         .context("RPC call failed")
         .map_err(ise)?;
+        // FIXME move to state machine effect
+        if obj_type == Some("Follow") {
+            let follow_id = object.id().ok_or(StatusCode::BAD_REQUEST)?;
+            let req_actor = object
+                .get_node_iri("actor")
+                .ok_or(StatusCode::BAD_REQUEST)?;
+            let accept = Object::from(json!({
+                "@context": "https://www.w3.org/ns/activitystreams",
+                "type": "Accept",
+                "actor": format!("{}/users/{uid}", config.init.activity_pub.base_url),
+                "object": follow_id,
+                "to": req_actor
+            }));
+            let accept_cmd = C2sCommand {
+                uid,
+                act_key: ObjectKey::new(),
+                obj_key: ObjectKey::new(),
+                object: accept,
+            };
+            let command = ActivityPubCommand::C2sAccept(accept_cmd);
+            ractor::call!(
+                client,
+                RaftClientMsg::ClientRequest,
+                LogEntryValue::from(command)
+            )
+            .context("RPC call failed")
+            .map_err(ise)?;
+        }
         return Ok(());
     }
     Ok(())

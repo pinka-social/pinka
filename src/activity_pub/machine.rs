@@ -92,37 +92,49 @@ impl Actor for ActivityPubMachine {
 
 #[derive(Debug, Encode, Decode)]
 pub(crate) enum ActivityPubCommand {
+    // ===== 0..10 queue commands =====
     #[n(0)]
+    QueueDelivery(#[n(0)] Bytes, #[n(1)] DeliveryQueueItem),
+    #[n(1)]
+    ReceiveDelivery(#[n(0)] Bytes, #[n(1)] u64, #[n(2)] u64),
+    #[n(2)]
+    AckDelivery(#[n(0)] Bytes, #[n(1)] Bytes),
+
+    // ===== 10..32 server to server interactions =====
+    #[n(10)]
+    S2sCreate(#[n(0)] S2sCommand),
+    #[n(11)]
+    S2sDelete(#[n(0)] S2sCommand),
+    #[n(12)]
+    S2sLike(#[n(0)] S2sCommand),
+    #[n(13)]
+    S2sDislike(#[n(0)] S2sCommand),
+    #[n(14)]
+    S2sFollow(#[n(0)] S2sCommand),
+    #[n(15)]
+    S2sUndo(#[n(0)] S2sCommand),
+    #[n(16)]
+    S2sUpdate(#[n(0)] S2sCommand),
+    #[n(17)]
+    S2sAnnounce(#[n(0)] S2sCommand),
+
+    // ===== 32..100 reserved =====
+
+    // ===== 100..200 admin commands =====
+    #[n(100)]
     UpdateUser(
         #[n(0)] String,
         #[n(1)] Object<'static>,
         #[n(2)] Option<KeyMaterial>,
     ),
+
+    // ===== 200..256 client to server interactions =====
     /// Client to Server - Create Activity
-    #[n(1)]
+    #[n(200)]
     C2sCreate(#[n(0)] C2sCommand),
-    #[n(2)]
-    S2sCreate(#[n(0)] S2sCommand),
-    #[n(3)]
-    S2sDelete(#[n(0)] S2sCommand),
-    #[n(4)]
-    S2sLike(#[n(0)] S2sCommand),
-    #[n(5)]
-    S2sDislike(#[n(0)] S2sCommand),
-    #[n(6)]
-    S2sFollow(#[n(0)] S2sCommand),
-    #[n(7)]
-    S2sUndo(#[n(0)] S2sCommand),
-    #[n(8)]
-    S2sUpdate(#[n(0)] S2sCommand),
-    #[n(9)]
-    S2sAnnounce(#[n(0)] S2sCommand),
-    #[n(10)]
-    QueueDelivery(#[n(0)] Bytes, #[n(1)] DeliveryQueueItem),
-    #[n(11)]
-    ReceiveDelivery(#[n(0)] Bytes, #[n(1)] u64, #[n(2)] u64),
-    #[n(12)]
-    AckDelivery(#[n(0)] Bytes, #[n(1)] Bytes),
+    /// Client to Server - Add Activity
+    #[n(201)]
+    C2sAccept(#[n(0)] C2sCommand),
 }
 
 #[derive(Debug, Encode, Decode)]
@@ -175,6 +187,9 @@ impl State {
             }
             ActivityPubCommand::C2sCreate(cmd) => {
                 self.handle_c2s_create(cmd).await?;
+            }
+            ActivityPubCommand::C2sAccept(cmd) => {
+                self.handle_c2s_accept(cmd).await?;
             }
             ActivityPubCommand::S2sCreate(cmd) => {
                 self.handle_s2s_create(cmd).await?;
@@ -302,6 +317,23 @@ impl State {
         })
         .await??;
 
+        Ok(())
+    }
+    async fn handle_c2s_accept(&mut self, cmd: C2sCommand) -> Result<()> {
+        let C2sCommand {
+            uid: _,
+            act_key,
+            obj_key: _,
+            object,
+        } = cmd;
+        let mut batch = self.keyspace.batch().durability(Some(PersistMode::SyncAll));
+        let obj_repo = self.obj_repo.clone();
+        spawn_blocking(move || -> Result<()> {
+            obj_repo.insert(&mut batch, act_key, object)?;
+            batch.commit()?;
+            Ok(())
+        })
+        .await??;
         Ok(())
     }
     async fn handle_s2s_create(&mut self, cmd: S2sCommand) -> Result<()> {
