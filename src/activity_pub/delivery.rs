@@ -124,6 +124,20 @@ impl DeliveryWorkerState {
             return Ok(false);
         }
         let result = ReceiveResult::from_bytes(&bytes)?;
+
+        // Retry limited times
+        // TODO: make this configurable
+        if result.message.approximate_receive_count > 10 {
+            warn!(target: "apub", "give up, retried too many times");
+            let command = ActivityPubCommand::AckDelivery(result.key, receipt_handle);
+            let _ = ractor::call!(
+                raft_client,
+                RaftClientMsg::ClientRequest,
+                LogEntryValue::from(command)
+            )?;
+            return Ok(false);
+        }
+
         let message = result.message;
         let item = DeliveryQueueItem::from_bytes(&message.body)?;
 
