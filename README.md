@@ -12,6 +12,13 @@ Mastodon and other ActivityPub-compatible platforms.
 > x₄). This reflects both the project's core purpose and its systematic approach
 > to federated communications.
 
+> [!WARNING]
+> Pinka is still under active development. The database schema might change between
+> minor versions. See [FEATURES.md](FEATURES.md) for currently implemented features.
+
+> [!NOTE]
+> Federating with Mastodon mostly works now!
+
 ## ✨ Features
 
 - 🔄 **Full ActivityPub Integration**
@@ -36,17 +43,10 @@ Mastodon and other ActivityPub-compatible platforms.
   - No external database setup or management required
   - Self-contained and easy to deploy
 
-See [FEATURES.md](FEATURES.md) for:
-- Detailed feature list
-- Implementation status
-- Upcoming features
-- Development milestones
-
 ## 💡 Why Pinka?
 
 Pinka is designed to be **simple to deploy** and **easy to maintain**. With its embedded Fjall database and Ractor-based clustering, you don't need to worry about:
 - Setting up external databases
-- Database backup and maintenance
 - Complex deployment procedures
 - Additional infrastructure costs
 - Cluster coordination complexity
