@@ -55,18 +55,22 @@ impl IdObjIndex {
             }
             None => Bound::Unbounded,
         };
-        let iter = self.index.range((start, end));
+        let iter = self
+            .index
+            .range((start, end))
+            .filter(Result::is_ok)
+            .map(Result::unwrap)
+            .map(|(key, val)| (IdObjIndexKey::from(key.as_ref()), val))
+            .filter(|(key, _)| key.id() == id);
         match (first, last) {
             (Some(first), None) => {
-                for pair in iter.take(first as usize) {
-                    let (idx_key, _) = pair?;
-                    keys.push(IdObjIndexKey::from(idx_key.as_ref()).obj_key());
+                for (idx_key, _) in iter.take(first as usize) {
+                    keys.push(idx_key.obj_key());
                 }
             }
             (None, Some(last)) => {
-                for pair in iter.rev().take(last as usize) {
-                    let (idx_key, _) = pair?;
-                    keys.push(IdObjIndexKey::from(idx_key.as_ref()).obj_key());
+                for (idx_key, _) in iter.rev().take(last as usize) {
+                    keys.push(idx_key.obj_key());
                 }
                 keys.reverse();
             }
@@ -74,16 +78,14 @@ impl IdObjIndex {
                 //  Including a value for both first and last is strongly
                 //  discouraged, as it is likely to lead to confusing queries and
                 //  results.
-                for pair in iter.take(first as usize) {
-                    let (idx_key, _) = pair?;
-                    keys.push(IdObjIndexKey::from(idx_key.as_ref()).obj_key());
+                for (idx_key, _) in iter.take(first as usize) {
+                    keys.push(idx_key.obj_key());
                 }
                 keys = keys.into_iter().rev().take(last as usize).collect();
             }
             (None, None) => {
-                for pair in iter {
-                    let (idx_key, _) = pair?;
-                    keys.push(IdObjIndexKey::from(idx_key.as_ref()).obj_key());
+                for (idx_key, _) in iter {
+                    keys.push(idx_key.obj_key());
                 }
             }
         }
