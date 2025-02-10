@@ -534,44 +534,55 @@ async fn get_followers(
 ) -> Result<ActivityStreamsJson<Value>, StatusCode> {
     spawn_blocking(move || {
         let index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
+        // TODO generic collections handling
         if params.has_page() {
             let query = params.to_query();
             let PageParams { before, after, .. } = params;
-            let first = params.first.map(|first| first.clamp(0, 50));
-            let last = params.last.map(|last| last.clamp(0, 50));
+            let first = params
+                .first
+                .or_else(|| after.as_ref().map(|_| 10))
+                .map(|first| first.clamp(0, 50));
+            let last = params
+                .last
+                .or_else(|| before.as_ref().map(|_| 10))
+                .map(|last| last.clamp(0, 50));
             let items: Vec<(ObjectKey, String)> = index
                 .find_followers(&uid, before, after, first, last)
                 .map_err(invalid)?;
-            let (prev, next) = if !items.is_empty() {
+            let (next, prev) = if !items.is_empty() {
                 (Some(items[0].0), Some(items.last().unwrap().0))
             } else {
                 (None, None)
             };
-            let items = items.into_iter().map(|it| it.1).collect();
+            let items = items.into_iter().rev().map(|it| it.1).collect();
             let mut followers = Collection::new()
                 .id(format!(
-                    "{}/users/{uid}/outbox?{query}",
+                    "{}/users/{uid}/followers?{query}",
                     config.init.activity_pub.base_url,
                 ))
-                .first(format!(
+                .part_of(format!(
+                    "{}/users/{uid}/followers",
+                    config.init.activity_pub.base_url
+                ))
+                .last(format!(
                     "{}/users/{uid}/followers?after={}",
                     config.init.activity_pub.base_url,
                     Uuid::nil().simple()
                 ))
-                .last(format!(
-                    "{}/users/{uid}/followers?after={}",
+                .first(format!(
+                    "{}/users/{uid}/followers?before={}",
                     config.init.activity_pub.base_url,
                     Uuid::max().simple()
                 ))
                 .with_ordered_items(items)
                 .ordered();
-            if let Some(id) = prev {
+            if let Some(id) = next {
                 followers = followers.prev(format!(
                     "{}/users/{uid}/followers?before={id}",
                     config.init.activity_pub.base_url
                 ));
             }
-            if let Some(id) = next {
+            if let Some(id) = prev {
                 followers = followers.next(format!(
                     "{}/users/{uid}/followers?after={id}",
                     config.init.activity_pub.base_url
@@ -584,13 +595,13 @@ async fn get_followers(
                     "{}/users/{uid}/followers",
                     config.init.activity_pub.base_url
                 ))
-                .first(format!(
+                .last(format!(
                     "{}/users/{uid}/followers?after={}",
                     config.init.activity_pub.base_url,
                     Uuid::nil().simple()
                 ))
-                .last(format!(
-                    "{}/users/{uid}/followers?after={}",
+                .first(format!(
+                    "{}/users/{uid}/followers?before={}",
                     config.init.activity_pub.base_url,
                     Uuid::max().simple()
                 ))

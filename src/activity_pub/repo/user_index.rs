@@ -65,7 +65,9 @@ impl UserIndex {
             if let Some(obj) = self.object_repo.find_one(key.as_ref())? {
                 items.push((
                     ObjectKey::try_from(key.as_ref())?,
-                    obj.id().expect("actor should have id property").to_owned(),
+                    obj.get_node_iri("actor")
+                        .expect("actor should have id property")
+                        .to_owned(),
                 ));
             }
         }

@@ -377,6 +377,7 @@ impl State {
             object,
         } = cmd;
         if object.has_props(&["object"]) {
+            // TODO verify object is the actor IRI
             let keyspace = self.keyspace.clone();
             let iri_index = self.iri_index.clone();
             let obj_repo = self.obj_repo.clone();
