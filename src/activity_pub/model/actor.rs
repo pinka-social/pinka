@@ -23,7 +23,13 @@ impl Actor<'_> {
         let Value::Object(properties) = json!({
             "@context": [
                 "https://www.w3.org/ns/activitystreams",
-                "https://w3id.org/security/v1"
+                "https://w3id.org/security/v1",
+                {
+                    "manuallyApprovesFollowers": "as:manuallyApprovesFollowers",
+                    "toot": "http://joinmastodon.org/ns#",
+                    "discoverable": "toot:discoverable",
+                    "indexable": "toot:indexable"
+                }
             ],
             "type": "Person",
             "id": format!("{}/users/{}", base_url, id),
