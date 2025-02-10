@@ -36,7 +36,13 @@ rand = "0.9.0"
 axum = "0.8.1"
 bimap = "0.6.3"
 jiff = "0.1.26"
-reqwest = { version = "0.12.12", features = ["gzip", "json"] }
+reqwest = { version = "0.12.12", default-features = false, features = [
+    "http2",
+    "rustls-tls-native-roots",
+    "charset",
+    "gzip",
+    "json",
+] }
 # http signature
 aws-lc-rs = "1.12.2"
 base64ct = { version = "1.6.0", features = ["alloc"] }

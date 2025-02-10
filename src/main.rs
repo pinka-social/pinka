@@ -23,6 +23,7 @@ use self::supervisor::Supervisor;
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
+    let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let flags = Pinka::from_env_or_exit();
 
