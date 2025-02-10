@@ -198,7 +198,6 @@ impl SupervisorState {
             FeedSlurpWorker,
             FeedSlurpWorkerInit {
                 apub: self.config.init.activity_pub.clone(),
-                config: self.config.init.feed_slurp.clone(),
             },
             self.myself.get_cell(),
         )

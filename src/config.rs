@@ -14,7 +14,6 @@ pub(crate) struct Config {
     pub(crate) cluster: ClusterConfig,
     pub(crate) database: DatabaseConfig,
     pub(crate) activity_pub: ActivityPubConfig,
-    pub(crate) feed_slurp: FeedSlurpConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -46,7 +45,6 @@ pub(crate) struct ClusterConfig {
     pub(crate) pem_dir: Option<PathBuf>,
     pub(crate) ca_certs: Vec<PathBuf>,
     pub(crate) servers: Vec<ServerConfig>,
-    pub(crate) manholes: Vec<ManholeConfig>,
     pub(crate) reconnect_timeout_ms: u64,
 }
 
@@ -92,19 +90,6 @@ pub(crate) struct DatabaseConfig {
 pub(crate) struct ActivityPubConfig {
     pub(crate) base_url: String,
     pub(crate) webfinger_at_host: String,
-}
-
-#[derive(Clone, Default, Debug, Deserialize)]
-#[serde(default)]
-pub(crate) struct FeedSlurpConfig {}
-
-#[derive(Clone, Default, Debug, Deserialize)]
-#[serde(default)]
-pub(crate) struct ManholeConfig {
-    pub(crate) server_name: String,
-    pub(crate) auth_cookie: String,
-    pub(crate) port: u16,
-    pub(crate) enable: bool,
 }
 
 #[derive(Clone)]

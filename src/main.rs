@@ -16,7 +16,7 @@ use ractor::Actor;
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{error, info};
 
-use self::config::{ActivityPubConfig, Config, FeedSlurpConfig, RuntimeConfig};
+use self::config::{ActivityPubConfig, Config, RuntimeConfig};
 use self::flags::{Pinka, PinkaCmd};
 use self::supervisor::Supervisor;
 

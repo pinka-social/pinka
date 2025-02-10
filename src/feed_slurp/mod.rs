@@ -9,18 +9,16 @@ use crate::activity_pub::machine::{ActivityPubCommand, C2sCommand};
 use crate::activity_pub::model::Object;
 use crate::activity_pub::{uuidgen, ObjectKey};
 use crate::raft::{get_raft_local_client, LogEntryValue, RaftClientMsg};
-use crate::{ActivityPubConfig, FeedSlurpConfig};
+use crate::ActivityPubConfig;
 
 pub(crate) struct FeedSlurpWorker;
 
 pub(crate) struct FeedSlurpWorkerInit {
     pub(crate) apub: ActivityPubConfig,
-    pub(crate) config: FeedSlurpConfig,
 }
 
 pub(crate) struct FeedSlurpWorkerState {
     apub: ActivityPubConfig,
-    config: FeedSlurpConfig,
 }
 
 #[derive(RactorMessage)]
@@ -42,8 +40,8 @@ impl Actor for FeedSlurpWorker {
         _myself: ActorRef<Self::Msg>,
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let FeedSlurpWorkerInit { apub, config } = args;
-        Ok(FeedSlurpWorkerState { apub, config })
+        let FeedSlurpWorkerInit { apub } = args;
+        Ok(FeedSlurpWorkerState { apub })
     }
     async fn handle(
         &self,
