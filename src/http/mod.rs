@@ -1,3 +1,6 @@
+mod auth;
+mod content_type;
+
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
@@ -8,9 +11,10 @@ use axum::http::{Method, StatusCode, Uri};
 use axum::middleware::from_fn;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use pem_rfc7468::{encode_string as pem_encode, LineEnding};
 use ractor::ActorRef;
+use secrecy::ExposeSecret;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
@@ -22,12 +26,15 @@ use crate::activity_pub::delivery::DeliveryQueueItem;
 use crate::activity_pub::machine::{ActivityPubCommand, C2sCommand, S2sCommand};
 use crate::activity_pub::model::{Actor, Collection, Create, Object};
 use crate::activity_pub::{
-    uuidgen, validate_request, ContextIndex, CryptoRepo, IriIndex, ObjectKey, ObjectRepo,
-    OutboxIndex, UserIndex,
+    uuidgen, validate_request, ContextIndex, CryptoRepo, IriIndex, KeyMaterial, ObjectKey,
+    ObjectRepo, OutboxIndex, UserIndex,
 };
 use crate::config::RuntimeConfig;
 use crate::feed_slurp::FeedSlurpMsg;
 use crate::raft::{get_raft_local_client, LogEntryValue, RaftClientMsg};
+
+use self::auth::admin_basic_auth;
+use self::content_type::ActivityStreamsJson;
 
 #[derive(Debug, Deserialize)]
 struct PageParams {
@@ -66,8 +73,16 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
     }
     let app = Router::new()
         .route("/.well-known/webfinger", get(get_webfinger))
-        .route("/users/{id}", get(get_actor).post(post_actor))
-        .route("/users/{id}/outbox", get(get_outbox).post(post_outbox))
+        .route("/users/{id}", get(get_actor))
+        .route(
+            "/users/{id}",
+            post(post_actor).layer(from_fn(admin_basic_auth)),
+        )
+        .route("/users/{id}/outbox", get(get_outbox))
+        .route(
+            "/users/{id}/outbox",
+            post(post_outbox).layer(from_fn(admin_basic_auth)),
+        )
         .route(
             "/users/{id}/inbox",
             post(post_inbox).layer(from_fn(validate_request)),
@@ -75,8 +90,12 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
         .route("/users/{id}/followers", get(get_followers))
         .route("/as/objects/{obj_key}", get(get_object_by_id))
         .route("/as/objects/{obj_key}/{prop}", get(get_object_likes_shares))
-        .route("/as/admin/ingest_feed", post(post_ingest_feed))
+        .route(
+            "/as/admin/ingest_feed",
+            post(post_ingest_feed).layer(from_fn(admin_basic_auth)),
+        )
         .fallback(get_object_by_iri)
+        .layer(Extension(config.init.admin.clone()))
         .with_state(config.clone());
     let listener = TcpListener::bind(format!("0.0.0.0:{}", config.server.http.port)).await?;
     axum::serve(listener, app).await?;
@@ -86,7 +105,7 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
 async fn get_object_by_id(
     State(config): State<RuntimeConfig>,
     Path(obj_key): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<ActivityStreamsJson<Value>, StatusCode> {
     spawn_blocking(move || {
         let obj_key = ObjectKey::from_str(&obj_key)
             .context("invalid UUID")
@@ -102,7 +121,7 @@ async fn get_object_by_iri(
     State(config): State<RuntimeConfig>,
     method: Method,
     uri: Uri,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<ActivityStreamsJson<Value>, StatusCode> {
     if !matches!(method, Method::GET) {
         return Err(StatusCode::METHOD_NOT_ALLOWED);
     }
@@ -127,7 +146,7 @@ async fn get_object_by_iri(
 fn blocking_get_object(
     config: &RuntimeConfig,
     obj_key: ObjectKey,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<ActivityStreamsJson<Value>, StatusCode> {
     let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
     let obj_repo = ObjectRepo::new(config.keyspace.clone()).map_err(ise)?;
     info!(%obj_key, "loading object");
@@ -150,9 +169,9 @@ fn blocking_get_object(
                     "totalItems": shares
                 }),
             );
-            return Ok(Json(object.into()));
+            return Ok(ActivityStreamsJson(Json(object.into())));
         }
-        return Ok(Json(object.into()));
+        return Ok(ActivityStreamsJson(Json(object.into())));
     }
     Err(StatusCode::NOT_FOUND)
 }
@@ -160,7 +179,7 @@ fn blocking_get_object(
 async fn get_object_likes_shares(
     State(config): State<RuntimeConfig>,
     Path((obj_key, prop)): Path<(String, String)>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<ActivityStreamsJson<Value>, StatusCode> {
     if prop != "likes" && prop != "shares" {
         return Err(StatusCode::NOT_FOUND);
     }
@@ -175,12 +194,12 @@ async fn get_object_likes_shares(
             "shares" => ctx_index.count_shares(&iri),
             _ => unreachable!(),
         };
-        Ok(Json(json!({
+        Ok(ActivityStreamsJson(Json(json!({
             "@context": "https://www.w3.org/ns/activitystreams",
             "id": format!("{}/as/objects/{obj_key}/{prop}", config.init.activity_pub.base_url),
             "type": "Collection",
             "totalItems": count
-        })))
+        }))))
     })
     .await
     .context("task failed")
@@ -205,7 +224,7 @@ async fn get_webfinger(
             return Err(StatusCode::BAD_REQUEST);
         };
         let user_index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
-        if user_index.find_one(&uid).map_err(ise)?.is_some() {
+        if user_index.find_one(uid).map_err(ise)?.is_some() {
             let jrd = json!({
                 "subject": subject,
                 "links": [
@@ -234,19 +253,19 @@ async fn get_webfinger(
 async fn get_actor(
     State(config): State<RuntimeConfig>,
     Path(uid): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<ActivityStreamsJson<Value>, StatusCode> {
     spawn_blocking(move || {
         let user_index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
         let crypto_repo = CryptoRepo::new(config.keyspace.clone()).map_err(ise)?;
         if let Some(object) = user_index.find_one(&uid).map_err(ise)? {
             let raw_actor = Actor::from(object);
             // TODO store public key separately?
-            let private_key_bytes = crypto_repo
+            let key_material = crypto_repo
                 .find_one(&uid)
                 .map_err(ise)?
                 .context("")
                 .map_err(ise)?;
-            let private_key = PrivateDecryptingKey::from_pkcs8(&private_key_bytes)
+            let private_key = PrivateDecryptingKey::from_pkcs8(key_material.expose_secret())
                 .context("")
                 .map_err(ise)?;
             let pub_key = private_key
@@ -258,7 +277,7 @@ async fn get_actor(
             let pem = pem_encode("PUBLIC KEY", LineEnding::LF, pub_key.as_ref())
                 .expect("must encode public key to PEM");
             let actor = raw_actor.enrich_with(&config.init.activity_pub, &pem);
-            return Ok(Json(actor.into()));
+            return Ok(ActivityStreamsJson(Json(actor.into())));
         }
         Err(StatusCode::NOT_FOUND)
     })
@@ -289,7 +308,7 @@ async fn post_actor(
                     .as_der()
                     .context("failed to serialize private key")
                     .map_err(ise)?;
-                Some(private_key_der.as_ref().into())
+                Some(KeyMaterial::from(private_key_der.as_ref().to_vec()))
             } else {
                 None
             }
@@ -312,7 +331,7 @@ async fn get_outbox(
     State(config): State<RuntimeConfig>,
     Path(uid): Path<String>,
     Query(params): Query<PageParams>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<ActivityStreamsJson<Value>, StatusCode> {
     spawn_blocking(move || {
         let index = OutboxIndex::new(config.keyspace.clone()).map_err(ise)?;
         let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
@@ -395,7 +414,7 @@ async fn get_outbox(
                     config.init.activity_pub.base_url
                 ));
             }
-            Ok(Json(outbox.into_page().into()))
+            Ok(ActivityStreamsJson(Json(outbox.into_page().into())))
         } else {
             let outbox = Collection::new()
                 .id(format!(
@@ -414,7 +433,7 @@ async fn get_outbox(
                 ))
                 .total_items(index.count(&uid))
                 .ordered();
-            Ok(Json(outbox.into()))
+            Ok(ActivityStreamsJson(Json(outbox.into())))
         }
     })
     .await
@@ -474,16 +493,20 @@ async fn post_outbox(
     Err(StatusCode::BAD_REQUEST)
 }
 
-async fn post_inbox(Path(uid): Path<String>, Json(value): Json<Value>) -> Result<(), StatusCode> {
+async fn post_inbox(
+    State(config): State<RuntimeConfig>,
+    Path(uid): Path<String>,
+    Json(value): Json<Value>,
+) -> Result<(), StatusCode> {
     let object = Object::from(value);
     if object.is_inbox_activity() {
         let client = get_raft_local_client().map_err(ise)?;
         let obj_type = object.get_first_type();
         let obj_type = obj_type.as_deref();
         let scoped_cmd = S2sCommand {
-            uid,
+            uid: uid.clone(),
             obj_key: ObjectKey::new(),
-            object,
+            object: object.clone(),
         };
         let command = match obj_type {
             Some("Create") => ActivityPubCommand::S2sCreate(scoped_cmd),
@@ -503,6 +526,48 @@ async fn post_inbox(Path(uid): Path<String>, Json(value): Json<Value>) -> Result
         )
         .context("RPC call failed")
         .map_err(ise)?;
+        // FIXME move to state machine effect
+        if obj_type == Some("Follow") {
+            let follow_id = object.id().ok_or(StatusCode::BAD_REQUEST)?;
+            let req_actor = object
+                .get_node_iri("actor")
+                .ok_or(StatusCode::BAD_REQUEST)?;
+            let act_key = ObjectKey::new();
+            let accept = Object::from(json!({
+                "@context": "https://www.w3.org/ns/activitystreams",
+                "type": "Accept",
+                "actor": format!("{}/users/{uid}", config.init.activity_pub.base_url),
+                "object": follow_id,
+                "to": req_actor
+            }));
+            let accept = accept.ensure_id(format!(
+                "{}/as/objects/{act_key}",
+                config.init.activity_pub.base_url
+            ));
+            let accept_cmd = C2sCommand {
+                uid: uid.clone(),
+                act_key,
+                obj_key: ObjectKey::new(), // not used
+                object: accept,
+            };
+            let command = ActivityPubCommand::C2sAccept(accept_cmd);
+            ractor::call!(
+                client,
+                RaftClientMsg::ClientRequest,
+                LogEntryValue::from(command)
+            )
+            .context("RPC call failed")
+            .map_err(ise)?;
+            let command =
+                ActivityPubCommand::QueueDelivery(uuidgen(), DeliveryQueueItem { uid, act_key });
+            ractor::call!(
+                client,
+                RaftClientMsg::ClientRequest,
+                LogEntryValue::from(command)
+            )
+            .context("RPC call failed")
+            .map_err(ise)?;
+        }
         return Ok(());
     }
     Ok(())
@@ -512,72 +577,83 @@ async fn get_followers(
     State(config): State<RuntimeConfig>,
     Path(uid): Path<String>,
     Query(params): Query<PageParams>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<ActivityStreamsJson<Value>, StatusCode> {
     spawn_blocking(move || {
         let index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
+        // TODO generic collections handling
         if params.has_page() {
             let query = params.to_query();
             let PageParams { before, after, .. } = params;
-            let first = params.first.map(|first| first.clamp(0, 50));
-            let last = params.last.map(|last| last.clamp(0, 50));
+            let first = params
+                .first
+                .or_else(|| after.as_ref().map(|_| 10))
+                .map(|first| first.clamp(0, 50));
+            let last = params
+                .last
+                .or_else(|| before.as_ref().map(|_| 10))
+                .map(|last| last.clamp(0, 50));
             let items: Vec<(ObjectKey, String)> = index
                 .find_followers(&uid, before, after, first, last)
                 .map_err(invalid)?;
-            let (prev, next) = if !items.is_empty() {
+            let (next, prev) = if !items.is_empty() {
                 (Some(items[0].0), Some(items.last().unwrap().0))
             } else {
                 (None, None)
             };
-            let items = items.into_iter().map(|it| it.1).collect();
+            let items = items.into_iter().rev().map(|it| it.1).collect();
             let mut followers = Collection::new()
                 .id(format!(
-                    "{}/users/{uid}/outbox?{query}",
+                    "{}/users/{uid}/followers?{query}",
                     config.init.activity_pub.base_url,
                 ))
-                .first(format!(
+                .part_of(format!(
+                    "{}/users/{uid}/followers",
+                    config.init.activity_pub.base_url
+                ))
+                .last(format!(
                     "{}/users/{uid}/followers?after={}",
                     config.init.activity_pub.base_url,
                     Uuid::nil().simple()
                 ))
-                .last(format!(
-                    "{}/users/{uid}/followers?after={}",
+                .first(format!(
+                    "{}/users/{uid}/followers?before={}",
                     config.init.activity_pub.base_url,
                     Uuid::max().simple()
                 ))
                 .with_ordered_items(items)
                 .ordered();
-            if let Some(id) = prev {
+            if let Some(id) = next {
                 followers = followers.prev(format!(
                     "{}/users/{uid}/followers?before={id}",
                     config.init.activity_pub.base_url
                 ));
             }
-            if let Some(id) = next {
+            if let Some(id) = prev {
                 followers = followers.next(format!(
                     "{}/users/{uid}/followers?after={id}",
                     config.init.activity_pub.base_url
                 ));
             }
-            Ok(Json(followers.into_page().into()))
+            Ok(ActivityStreamsJson(Json(followers.into_page().into())))
         } else {
             let followers = Collection::new()
                 .id(format!(
                     "{}/users/{uid}/followers",
                     config.init.activity_pub.base_url
                 ))
-                .first(format!(
+                .last(format!(
                     "{}/users/{uid}/followers?after={}",
                     config.init.activity_pub.base_url,
                     Uuid::nil().simple()
                 ))
-                .last(format!(
-                    "{}/users/{uid}/followers?after={}",
+                .first(format!(
+                    "{}/users/{uid}/followers?before={}",
                     config.init.activity_pub.base_url,
                     Uuid::max().simple()
                 ))
                 .total_items(index.count_followers(&uid))
                 .ordered();
-            Ok(Json(followers.into()))
+            Ok(ActivityStreamsJson(Json(followers.into())))
         }
     })
     .await

@@ -26,7 +26,7 @@ use anyhow::{anyhow, Context, Result};
 use fjall::{KvSeparationOptions, PartitionCreateOptions, PartitionHandle, PersistMode};
 use ractor::{pg, Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent};
 use ractor_cluster::{RactorClusterMessage, RactorMessage};
-use rand::{thread_rng, Rng};
+use rand::Rng;
 use tokio::select;
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::task::spawn_blocking;
@@ -466,21 +466,19 @@ impl RaftState {
             voted_for: self.voted_for.clone(),
             last_applied: self.last_applied,
         };
-        let keyspace = self.config.keyspace.clone();
+        let mut batch = self
+            .config
+            .keyspace
+            .batch()
+            .durability(Some(PersistMode::SyncAll));
         let restore = self.restore.clone();
         spawn_blocking(move || {
             saved
                 .to_bytes()
                 .context("Failed to serialize raft_saved state")
                 .and_then(|value| {
-                    restore
-                        .insert("raft_saved", value.as_slice())
-                        .context("Failed to update raft_saved state")
-                })
-                .and_then(|_| {
-                    keyspace
-                        .persist(PersistMode::SyncAll)
-                        .context("Failed to persist change")
+                    batch.insert(&restore, "raft_saved", value.as_slice());
+                    batch.commit().context("Failed to persist change")
                 })
         })
         .await??;
@@ -549,11 +547,11 @@ impl RaftState {
         if cluster_size == 1 {
             return true;
         }
-        self.votes_received.len() >= cluster_size / 2 + 1
+        self.votes_received.len() > cluster_size / 2
     }
 
     fn set_election_timer(&mut self) {
-        let duration = Duration::from_millis(rand::thread_rng().gen_range(
+        let duration = Duration::from_millis(rand::rng().random_range(
             self.config.init.raft.min_election_ms..=self.config.init.raft.max_election_ms,
         ));
 
@@ -649,9 +647,6 @@ impl RaftState {
     }
 
     async fn advance_commit_index(&mut self, peer_info: AdvanceCommitIndexMsg) -> Result<()> {
-        if thread_rng().gen_bool(1.0 / 10000.0) {
-            panic!("simulated crash");
-        }
         if !matches!(self.role, RaftRole::Leader) {
             warn!(target: "raft", "advance_commit_index called as {:?}", self.role);
             return Ok(());
@@ -930,6 +925,7 @@ impl RaftState {
         reply: RpcReplyPort<ClientResult>,
     ) -> Result<()> {
         if matches!(self.role, RaftRole::Leader) {
+            debug!(target: "raft", "received client request");
             let log_index = self.append_log(request).await?;
             self.pending_responses.insert(log_index, reply);
             return Ok(());
@@ -1068,17 +1064,32 @@ impl RaftState {
             term: self.current_term,
             value,
         };
-        let keyspace = self.config.keyspace.clone();
+        let mut batch = self
+            .config
+            .keyspace
+            .batch()
+            .durability(Some(PersistMode::SyncAll));
         let log = self.log.clone();
         let value_bytes = new_log_entry.to_bytes()?;
         spawn_blocking(move || -> Result<()> {
-            log.insert(index.to_be_bytes(), value_bytes)?;
-            keyspace.persist(PersistMode::SyncAll)?;
+            batch.insert(&log, index.to_be_bytes(), value_bytes);
+            batch.commit()?;
             Ok(())
         })
         .await??;
         self.last_log_index = index;
         self.last_log_term = self.current_term;
+
+        // special case single server mode
+        if self.config.init.cluster.servers.len() == 1 {
+            debug!(target: "raft", "commit immediately for single server cluster");
+            self.advance_commit_index(AdvanceCommitIndexMsg {
+                peer_id: Some(self.peer_id()),
+                match_index: index,
+            })
+            .await?;
+        }
+
         Ok(self.last_log_index)
     }
 
@@ -1109,12 +1120,16 @@ impl RaftState {
     }
 
     async fn remove_last_log_entry(&mut self) -> Result<()> {
-        let keyspace = self.config.keyspace.clone();
+        let mut batch = self
+            .config
+            .keyspace
+            .batch()
+            .durability(Some(PersistMode::SyncAll));
         let log = self.log.clone();
         let last_log_index = self.last_log_index;
         spawn_blocking(move || {
-            log.remove(last_log_index.to_be_bytes())?;
-            keyspace.persist(PersistMode::SyncAll)
+            batch.remove(&log, last_log_index.to_be_bytes());
+            batch.commit()
         })
         .await??;
         self.last_log_index -= 1;

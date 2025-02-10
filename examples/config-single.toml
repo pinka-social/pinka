@@ -1,0 +1,12 @@
+[admin]
+password = "QCYFQS4CZVnPcRw9pNkAxjWvb1O8J2AQ"
+
+[[cluster.servers]]
+name = "single"
+
+[database]
+path = "devdb"
+
+[activity_pub]
+base_url = "http://localhost:8080" # without trailing slash
+webfinger_at_host = "@localhost"

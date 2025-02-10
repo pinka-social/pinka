@@ -2,16 +2,32 @@ use std::fmt::Debug;
 use std::path::PathBuf;
 
 use fjall::Keyspace;
+use secrecy::SecretString;
 use serde::Deserialize;
+use uuid::Uuid;
 
 #[derive(Clone, Default, Debug, Deserialize)]
 #[serde(default)]
 pub(crate) struct Config {
+    pub(crate) admin: AdminConfig,
     pub(crate) raft: RaftConfig,
     pub(crate) cluster: ClusterConfig,
     pub(crate) database: DatabaseConfig,
     pub(crate) activity_pub: ActivityPubConfig,
     pub(crate) feed_slurp: FeedSlurpConfig,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct AdminConfig {
+    pub(crate) password: SecretString,
+}
+
+impl Default for AdminConfig {
+    fn default() -> Self {
+        Self {
+            password: Uuid::new_v4().to_string().into(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -61,7 +77,7 @@ impl Default for HttpConfig {
     fn default() -> Self {
         Self {
             listen: true,
-            port: 80,
+            port: 8080,
         }
     }
 }

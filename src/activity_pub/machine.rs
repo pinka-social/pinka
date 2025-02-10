@@ -7,16 +7,18 @@ use tracing::{error, info, warn};
 use uuid::Bytes;
 
 use crate::raft::{get_raft_applied, ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg};
+use crate::ActivityPubConfig;
 
 use super::delivery::DeliveryQueueItem;
 use super::model::{Actor as AsActor, Create, Object, Update};
-use super::repo::{ContextIndex, CryptoRepo, OutboxIndex};
+use super::repo::{ContextIndex, CryptoRepo, KeyMaterial, OutboxIndex};
 use super::simple_queue::SimpleQueue;
 use super::{IriIndex, ObjectKey, ObjectRepo, UserIndex};
 
 pub(crate) struct ActivityPubMachine;
 
 pub(crate) struct State {
+    apub: ActivityPubConfig,
     keyspace: Keyspace,
     user_index: UserIndex,
     outbox_index: OutboxIndex,
@@ -28,6 +30,7 @@ pub(crate) struct State {
 }
 
 pub(crate) struct ActivityPubMachineInit {
+    pub(crate) apub: ActivityPubConfig,
     pub(crate) keyspace: Keyspace,
 }
 
@@ -41,7 +44,7 @@ impl Actor for ActivityPubMachine {
         _myself: ActorRef<Self::Msg>,
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let ActivityPubMachineInit { keyspace } = args;
+        let ActivityPubMachineInit { apub, keyspace } = args;
         spawn_blocking(move || {
             let user_index = UserIndex::new(keyspace.clone())?;
             let outbox_index = OutboxIndex::new(keyspace.clone())?;
@@ -51,6 +54,7 @@ impl Actor for ActivityPubMachine {
             let crypto_repo = CryptoRepo::new(keyspace.clone())?;
             let queue = SimpleQueue::new(keyspace.clone())?;
             Ok(State {
+                apub,
                 keyspace,
                 user_index,
                 outbox_index,
@@ -92,37 +96,49 @@ impl Actor for ActivityPubMachine {
 
 #[derive(Debug, Encode, Decode)]
 pub(crate) enum ActivityPubCommand {
+    // ===== 0..10 queue commands =====
     #[n(0)]
+    QueueDelivery(#[n(0)] Bytes, #[n(1)] DeliveryQueueItem),
+    #[n(1)]
+    ReceiveDelivery(#[n(0)] Bytes, #[n(1)] u64, #[n(2)] u64),
+    #[n(2)]
+    AckDelivery(#[n(0)] Bytes, #[n(1)] Bytes),
+
+    // ===== 10..32 server to server interactions =====
+    #[n(10)]
+    S2sCreate(#[n(0)] S2sCommand),
+    #[n(11)]
+    S2sDelete(#[n(0)] S2sCommand),
+    #[n(12)]
+    S2sLike(#[n(0)] S2sCommand),
+    #[n(13)]
+    S2sDislike(#[n(0)] S2sCommand),
+    #[n(14)]
+    S2sFollow(#[n(0)] S2sCommand),
+    #[n(15)]
+    S2sUndo(#[n(0)] S2sCommand),
+    #[n(16)]
+    S2sUpdate(#[n(0)] S2sCommand),
+    #[n(17)]
+    S2sAnnounce(#[n(0)] S2sCommand),
+
+    // ===== 32..100 reserved =====
+
+    // ===== 100..200 admin commands =====
+    #[n(100)]
     UpdateUser(
         #[n(0)] String,
         #[n(1)] Object<'static>,
-        #[n(2)] Option<Vec<u8>>,
+        #[n(2)] Option<KeyMaterial>,
     ),
+
+    // ===== 200..256 client to server interactions =====
     /// Client to Server - Create Activity
-    #[n(1)]
+    #[n(200)]
     C2sCreate(#[n(0)] C2sCommand),
-    #[n(2)]
-    S2sCreate(#[n(0)] S2sCommand),
-    #[n(3)]
-    S2sDelete(#[n(0)] S2sCommand),
-    #[n(4)]
-    S2sLike(#[n(0)] S2sCommand),
-    #[n(5)]
-    S2sDislike(#[n(0)] S2sCommand),
-    #[n(6)]
-    S2sFollow(#[n(0)] S2sCommand),
-    #[n(7)]
-    S2sUndo(#[n(0)] S2sCommand),
-    #[n(8)]
-    S2sUpdate(#[n(0)] S2sCommand),
-    #[n(9)]
-    S2sAnnounce(#[n(0)] S2sCommand),
-    #[n(10)]
-    QueueDelivery(#[n(0)] Bytes, #[n(1)] DeliveryQueueItem),
-    #[n(11)]
-    ReceiveDelivery(#[n(0)] Bytes, #[n(1)] u64, #[n(2)] u64),
-    #[n(12)]
-    AckDelivery(#[n(0)] Bytes, #[n(1)] Bytes),
+    /// Client to Server - Add Activity
+    #[n(201)]
+    C2sAccept(#[n(0)] C2sCommand),
 }
 
 #[derive(Debug, Encode, Decode)]
@@ -170,11 +186,14 @@ impl State {
         info!(target: "apub", ?command, "received command");
 
         match command {
-            ActivityPubCommand::UpdateUser(uid, object, key_pair) => {
-                self.handle_update_user(uid, object, key_pair).await?;
+            ActivityPubCommand::UpdateUser(uid, object, key_material) => {
+                self.handle_update_user(uid, object, key_material).await?;
             }
             ActivityPubCommand::C2sCreate(cmd) => {
                 self.handle_c2s_create(cmd).await?;
+            }
+            ActivityPubCommand::C2sAccept(cmd) => {
+                self.handle_c2s_accept(cmd).await?;
             }
             ActivityPubCommand::S2sCreate(cmd) => {
                 self.handle_s2s_create(cmd).await?;
@@ -228,7 +247,7 @@ impl State {
         &mut self,
         uid: String,
         object: Object<'static>,
-        key_pair: Option<Vec<u8>>,
+        key_material: Option<KeyMaterial>,
     ) -> Result<()> {
         let user = AsActor::from(object);
         let keyspace = self.keyspace.clone();
@@ -238,7 +257,7 @@ impl State {
         spawn_blocking(move || -> Result<()> {
             let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
             user_index.insert(&mut b, &uid, user)?;
-            if let Some(key_pair) = key_pair {
+            if let Some(key_pair) = key_material {
                 crypto_repo.insert(&mut b, &uid, &key_pair)?;
             }
             b.commit()?;
@@ -261,6 +280,7 @@ impl State {
                 return Ok(());
             }
         };
+        let base_url = self.apub.base_url.clone();
         let keyspace = self.keyspace.clone();
         let iri_index = self.iri_index.clone();
         let obj_repo = self.obj_repo.clone();
@@ -288,7 +308,10 @@ impl State {
                         // skip
                         return Ok(());
                     }
-                    let update = Update::try_from(update)?;
+                    // FIXME where should we ensure id and actor?
+                    let update = Update::try_from(update)?
+                        .ensure_id(format!("{}/as/objects/{act_key}", base_url))
+                        .with_actor(format!("{}/users/{uid}", base_url));
                     let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
                     outbox_index.insert_update(&mut b, uid, act_key, update.into())?;
                     b.commit()?;
@@ -302,6 +325,23 @@ impl State {
         })
         .await??;
 
+        Ok(())
+    }
+    async fn handle_c2s_accept(&mut self, cmd: C2sCommand) -> Result<()> {
+        let C2sCommand {
+            uid: _,
+            act_key,
+            obj_key: _,
+            object,
+        } = cmd;
+        let mut batch = self.keyspace.batch().durability(Some(PersistMode::SyncAll));
+        let obj_repo = self.obj_repo.clone();
+        spawn_blocking(move || -> Result<()> {
+            obj_repo.insert(&mut batch, act_key, object)?;
+            batch.commit()?;
+            Ok(())
+        })
+        .await??;
         Ok(())
     }
     async fn handle_s2s_create(&mut self, cmd: S2sCommand) -> Result<()> {
@@ -377,6 +417,7 @@ impl State {
             object,
         } = cmd;
         if object.has_props(&["object"]) {
+            // TODO verify object is the actor IRI
             let keyspace = self.keyspace.clone();
             let iri_index = self.iri_index.clone();
             let obj_repo = self.obj_repo.clone();

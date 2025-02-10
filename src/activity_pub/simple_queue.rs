@@ -84,8 +84,9 @@ impl SimpleQueue {
         let q_key = q_key(queue_name, key);
         let bytes = minicbor::to_vec(message)?;
 
-        self.messages.insert(q_key, bytes)?;
-        self.keyspace.persist(PersistMode::SyncAll)?;
+        let mut batch = self.keyspace.batch().durability(Some(PersistMode::SyncAll));
+        batch.insert(&self.messages, q_key, bytes);
+        batch.commit()?;
 
         Ok(())
     }

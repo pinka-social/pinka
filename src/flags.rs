@@ -1,8 +1,13 @@
+use std::path::PathBuf;
+
 xflags::xflags! {
     src "src/flags.rs"
 
     cmd pinka {
-        /// Launch the nth server from the config file
+        /// Config file path
+        required -c, --config PATH: PathBuf
+        /// Launch the nth server from the config file, default will launch the
+        /// first one in the list.
         optional -s, --server N: usize
 
         cmd serve {}
@@ -21,6 +26,7 @@ xflags::xflags! {
 // Run `env UPDATE_XFLAGS=1 cargo build` to regenerate.
 #[derive(Debug)]
 pub struct Pinka {
+    pub config: PathBuf,
     pub server: Option<usize>,
     pub subcommand: PinkaCmd,
 }

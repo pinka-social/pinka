@@ -32,7 +32,7 @@ impl TryFrom<Object<'_>> for Update<'static> {
         });
 
         let map = update.as_object_mut().unwrap();
-        for prop in ["to", "bto", "cc", "bcc", "audience"] {
+        for prop in ["actor", "to", "bto", "cc", "bcc", "audience"] {
             if let Some(v) = object.get_value(prop) {
                 map.insert(prop.to_string(), v);
             }

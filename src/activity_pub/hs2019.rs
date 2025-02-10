@@ -8,7 +8,7 @@ use aws_lc_rs::rsa::KeyPair;
 use aws_lc_rs::signature::{
     UnparsedPublicKey, VerificationAlgorithm, ECDSA_P256K1_SHA256_ASN1, ECDSA_P256K1_SHA256_FIXED,
     ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA256_FIXED, ED25519, RSA_PKCS1_2048_8192_SHA256,
-    RSA_PSS_2048_8192_SHA256, RSA_PSS_SHA256,
+    RSA_PKCS1_SHA256, RSA_PSS_2048_8192_SHA256,
 };
 use axum::body::{Body, Bytes};
 use axum::extract::Request;
@@ -23,6 +23,7 @@ use reqwest::header::{self, HeaderMap};
 use reqwest::{StatusCode, Url};
 use sha2::{Digest, Sha256, Sha512};
 use spki::SubjectPublicKeyInfoRef;
+use tracing::warn;
 
 use super::mailman::Mailman;
 use super::model::Object;
@@ -49,7 +50,7 @@ pub(super) fn post_headers(
     let rng = SystemRandom::new();
     let mut rsa_signature = vec![0; key_pair.public_modulus_len()];
     key_pair.sign(
-        &RSA_PSS_SHA256,
+        &RSA_PKCS1_SHA256,
         &rng,
         sig_body.as_bytes(),
         &mut rsa_signature,
@@ -61,7 +62,7 @@ pub(super) fn post_headers(
     headers.insert(header::DATE, date.parse()?);
     headers.insert("Digest", format!("SHA-256={digest}").parse()?);
     headers.insert(header::CONTENT_LENGTH, content_length.to_string().parse()?);
-    headers.insert("Signature", format!("keyId=\"{actor_iri}#main-key\",algorithm=\"hs2019\",headers=\"(request-target) host date digest content-length\",signature=\"{signature}\"").parse()?);
+    headers.insert("Signature", format!("keyId=\"{actor_iri}#main-key\",algorithm=\"rsa-sha256\",headers=\"(request-target) host date digest content-length\",signature=\"{signature}\"").parse()?);
 
     Ok(headers)
 }
@@ -93,9 +94,10 @@ pub(crate) async fn validate_request(
         .to_str()
         .map_err(bad)?;
     let sig_params = parse_sig_params(signature_header).map_err(bad)?;
-    let algorithm = sig_params.get("algorithm");
-    if algorithm.is_some() && algorithm != Some(&"hs2019".to_string()) {
-        return Err(StatusCode::NOT_IMPLEMENTED);
+    if let Some(algorithm) = sig_params.get("algorithm") {
+        if !["hs2019", "rsa-sha256"].contains(&algorithm.as_str()) {
+            warn!(target: "apub", "unknown http signature algorithm {algorithm} used, verification will likely fail");
+        }
     }
     let signature = Base64::decode_vec(sig_params.get("signature").ok_or(StatusCode::BAD_REQUEST)?)
         .map_err(bad)?;

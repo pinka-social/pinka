@@ -77,7 +77,14 @@ impl Actor for ClusterMaint {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         myself.send_interval(
-            Duration::from_millis(state.config.init.cluster.reconnect_timeout_ms),
+            Duration::from_millis(
+                state
+                    .config
+                    .init
+                    .cluster
+                    .reconnect_timeout_ms
+                    .clamp(10_000, u64::MAX),
+            ),
             || ClusterMaintMsg::CheckConnection,
         );
         state.spawn_node_server().await?;

@@ -37,14 +37,6 @@ impl ObjectRepo {
         }
         Ok(None)
     }
-    pub(crate) fn all(&self) -> Result<Vec<Object<'static>>> {
-        let mut result = vec![];
-        for bytes in self.objects.values() {
-            let object = object_serde::from_bytes(&bytes?)?;
-            result.push(object);
-        }
-        Ok(result)
-    }
 }
 
 #[cfg(test)]
