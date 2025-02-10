@@ -532,6 +532,7 @@ async fn post_inbox(
             let req_actor = object
                 .get_node_iri("actor")
                 .ok_or(StatusCode::BAD_REQUEST)?;
+            let act_key = ObjectKey::new();
             let accept = Object::from(json!({
                 "@context": "https://www.w3.org/ns/activitystreams",
                 "type": "Accept",
@@ -539,10 +540,14 @@ async fn post_inbox(
                 "object": follow_id,
                 "to": req_actor
             }));
+            let accept = accept.ensure_id(format!(
+                "{}/as/objects/{act_key}",
+                config.init.activity_pub.base_url
+            ));
             let accept_cmd = C2sCommand {
                 uid,
-                act_key: ObjectKey::new(),
-                obj_key: ObjectKey::new(),
+                act_key,
+                obj_key: ObjectKey::new(), // not used
                 object: accept,
             };
             let command = ActivityPubCommand::C2sAccept(accept_cmd);
