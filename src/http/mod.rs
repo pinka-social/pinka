@@ -545,12 +545,21 @@ async fn post_inbox(
                 config.init.activity_pub.base_url
             ));
             let accept_cmd = C2sCommand {
-                uid,
+                uid: uid.clone(),
                 act_key,
                 obj_key: ObjectKey::new(), // not used
                 object: accept,
             };
             let command = ActivityPubCommand::C2sAccept(accept_cmd);
+            ractor::call!(
+                client,
+                RaftClientMsg::ClientRequest,
+                LogEntryValue::from(command)
+            )
+            .context("RPC call failed")
+            .map_err(ise)?;
+            let command =
+                ActivityPubCommand::QueueDelivery(uuidgen(), DeliveryQueueItem { uid, act_key });
             ractor::call!(
                 client,
                 RaftClientMsg::ClientRequest,
