@@ -12,14 +12,12 @@ use std::process::exit;
 
 use anyhow::Result;
 use fd_lock::RwLock;
-use fjall::PartitionCreateOptions;
 use ractor::Actor;
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{error, info};
 
 use self::config::{ActivityPubConfig, Config, FeedSlurpConfig, RuntimeConfig};
-use self::flags::{Dump, Pinka, PinkaCmd, RaftCmd, Serve};
-use self::raft::{LogEntry, RaftSerDe};
+use self::flags::{Pinka, PinkaCmd, Serve};
 use self::supervisor::Supervisor;
 
 #[tokio::main]
@@ -71,12 +69,6 @@ async fn main() -> Result<()> {
 
     match flags.subcommand {
         PinkaCmd::Serve(flags) => serve(config, flags).await?,
-        PinkaCmd::Raft(raft) => match raft.subcommand {
-            RaftCmd::Dump(flags) => {
-                raft_dump(config, flags)?;
-            }
-        },
-        _ => {}
     }
 
     drop(write_guard);
@@ -111,23 +103,5 @@ async fn serve(config: RuntimeConfig, flags: Serve) -> Result<()> {
     supervisor.stop(None);
     actor_handle.await?;
 
-    Ok(())
-}
-
-fn raft_dump(config: RuntimeConfig, flags: Dump) -> Result<()> {
-    let log = config
-        .keyspace
-        .open_partition("raft_log", PartitionCreateOptions::default())?;
-    info!("Dump raft log entries");
-    info!("=====================");
-    for entry in log.range(flags.from.unwrap_or_default().to_be_bytes()..) {
-        let (key, value) = entry.unwrap();
-        let value = LogEntry::from_bytes(&value)?;
-        info!(
-            "key = {}, value = {:?}",
-            u64::from_be_bytes(key.as_ref().try_into().unwrap()),
-            value
-        );
-    }
     Ok(())
 }

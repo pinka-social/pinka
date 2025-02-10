@@ -3,6 +3,7 @@ use std::path::PathBuf;
 xflags::xflags! {
     src "src/flags.rs"
 
+    /// A commenting server that bridges static sites to ActivityPub sites.
     cmd pinka {
         /// Config file path
         required -c, --config PATH: PathBuf
@@ -10,13 +11,8 @@ xflags::xflags! {
         /// first one in the list.
         optional -s, --server N: usize
 
-        cmd serve {}
-        cmd raft {
-            cmd dump {
-                /// Start from index
-                optional --from index: u64
-            }
-        }
+        /// Run the server and start listen for HTTP requests.
+        cmd serve run {}
     }
 }
 
@@ -33,26 +29,10 @@ pub struct Pinka {
 #[derive(Debug)]
 pub enum PinkaCmd {
     Serve(Serve),
-    Raft(Raft),
 }
 
 #[derive(Debug)]
 pub struct Serve;
-
-#[derive(Debug)]
-pub struct Raft {
-    pub subcommand: RaftCmd,
-}
-
-#[derive(Debug)]
-pub enum RaftCmd {
-    Dump(Dump),
-}
-
-#[derive(Debug)]
-pub struct Dump {
-    pub from: Option<u64>,
-}
 
 impl Pinka {
     #[allow(dead_code)]
