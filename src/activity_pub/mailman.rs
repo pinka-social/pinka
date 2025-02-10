@@ -1,12 +1,16 @@
 use std::time::Duration;
 
 use anyhow::{bail, Result};
+use axum::http::HeaderValue;
 use reqwest::header::HeaderMap;
 use reqwest::{header, Client};
 use serde_json::Value;
 use tracing::error;
 
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
+const APPLICATION_LD_JSON: HeaderValue = HeaderValue::from_static(
+    "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"",
+);
 
 #[derive(Clone)]
 pub(super) struct Mailman {
@@ -15,23 +19,9 @@ pub(super) struct Mailman {
 
 impl Mailman {
     pub(super) fn new() -> Mailman {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::ACCEPT,
-            header::HeaderValue::from_static(
-                "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"",
-            ),
-        );
-        headers.insert(
-            header::CONTENT_TYPE,
-            header::HeaderValue::from_static(
-                "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"",
-            ),
-        );
         Mailman {
             client: Client::builder()
                 .user_agent(APP_USER_AGENT)
-                .default_headers(headers)
                 .gzip(true)
                 .timeout(Duration::from_secs(10))
                 .build()
@@ -39,13 +29,19 @@ impl Mailman {
         }
     }
     pub(super) async fn fetch(&self, iri: &str) -> Result<Value> {
-        let response = self.client.get(iri).send().await?;
+        let response = self
+            .client
+            .get(iri)
+            .header(header::ACCEPT, APPLICATION_LD_JSON)
+            .send()
+            .await?;
         Ok(response.json().await?)
     }
     pub(super) async fn post(&self, inbox: &str, headers: HeaderMap, body: &str) -> Result<()> {
         let response = self
             .client
             .post(inbox)
+            .header(header::CONTENT_TYPE, APPLICATION_LD_JSON)
             .headers(headers)
             .body(body.to_string())
             .send()
