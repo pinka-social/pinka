@@ -105,11 +105,12 @@ impl FeedSlurpWorkerState {
     }
 }
 
-fn object_from_feed_entry(base_url: &str, uid: &str, entry: &Entry) -> Object<'static> {
+fn object_from_feed_entry(apub_base_url: &str, uid: &str, entry: &Entry) -> Object<'static> {
     let mut object = Object::from(json!({
         "@context": "https://www.w3.org/ns/activitystreams",
         // TODO config as Note or Article
-        "type": "Note"
+        "type": "Note",
+        "actor": format!("{apub_base_url}/users/{uid}")
     }));
 
     if entry.id.starts_with("https") {
@@ -158,7 +159,7 @@ fn object_from_feed_entry(base_url: &str, uid: &str, entry: &Entry) -> Object<'s
     object = object.augment(
         "to",
         vec![
-            format!("{base_url}/users/{uid}/followers"),
+            format!("{apub_base_url}/users/{uid}/followers"),
             "https://www.w3.org/ns/activitystreams#Public".to_string(),
         ]
         .into(),
