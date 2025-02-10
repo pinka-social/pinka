@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use reqwest::header::HeaderMap;
 use reqwest::{header, Client};
 use serde_json::Value;
@@ -52,7 +52,9 @@ impl Mailman {
             .await?;
         if response.error_for_status_ref().is_err() {
             error!(target: "apub", ?response, "posting to {inbox} failed");
-            response.error_for_status()?;
+            let text = response.text().await?;
+            error!(target: "apub", text, "error response");
+            bail!("posting to {inbox} failed");
         }
         Ok(())
     }
