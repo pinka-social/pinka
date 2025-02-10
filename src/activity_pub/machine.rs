@@ -7,6 +7,7 @@ use tracing::{error, info, warn};
 use uuid::Bytes;
 
 use crate::raft::{get_raft_applied, ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg};
+use crate::ActivityPubConfig;
 
 use super::delivery::DeliveryQueueItem;
 use super::model::{Actor as AsActor, Create, Object, Update};
@@ -17,6 +18,7 @@ use super::{IriIndex, ObjectKey, ObjectRepo, UserIndex};
 pub(crate) struct ActivityPubMachine;
 
 pub(crate) struct State {
+    apub: ActivityPubConfig,
     keyspace: Keyspace,
     user_index: UserIndex,
     outbox_index: OutboxIndex,
@@ -28,6 +30,7 @@ pub(crate) struct State {
 }
 
 pub(crate) struct ActivityPubMachineInit {
+    pub(crate) apub: ActivityPubConfig,
     pub(crate) keyspace: Keyspace,
 }
 
@@ -41,7 +44,7 @@ impl Actor for ActivityPubMachine {
         _myself: ActorRef<Self::Msg>,
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let ActivityPubMachineInit { keyspace } = args;
+        let ActivityPubMachineInit { apub, keyspace } = args;
         spawn_blocking(move || {
             let user_index = UserIndex::new(keyspace.clone())?;
             let outbox_index = OutboxIndex::new(keyspace.clone())?;
@@ -51,6 +54,7 @@ impl Actor for ActivityPubMachine {
             let crypto_repo = CryptoRepo::new(keyspace.clone())?;
             let queue = SimpleQueue::new(keyspace.clone())?;
             Ok(State {
+                apub,
                 keyspace,
                 user_index,
                 outbox_index,
@@ -276,6 +280,7 @@ impl State {
                 return Ok(());
             }
         };
+        let base_url = self.apub.base_url.clone();
         let keyspace = self.keyspace.clone();
         let iri_index = self.iri_index.clone();
         let obj_repo = self.obj_repo.clone();
@@ -303,7 +308,10 @@ impl State {
                         // skip
                         return Ok(());
                     }
-                    let update = Update::try_from(update)?;
+                    // FIXME where should we ensure id and actor?
+                    let update = Update::try_from(update)?
+                        .ensure_id(format!("{}/as/objects/{act_key}", base_url))
+                        .with_actor(format!("{}/users/{uid}", base_url));
                     let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
                     outbox_index.insert_update(&mut b, uid, act_key, update.into())?;
                     b.commit()?;

@@ -59,6 +59,7 @@ impl Actor for Supervisor {
             Some("state_machine".into()),
             ActivityPubMachine,
             ActivityPubMachineInit {
+                apub: config.init.activity_pub.clone(),
                 keyspace: config.keyspace.clone(),
             },
             myself.get_cell(),
@@ -151,6 +152,7 @@ impl Actor for Supervisor {
                         Some("state_machine".into()),
                         ActivityPubMachine,
                         ActivityPubMachineInit {
+                            apub: state.config.init.activity_pub.clone(),
                             keyspace: state.config.keyspace.clone(),
                         },
                         myself.get_cell(),
