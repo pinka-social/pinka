@@ -1,3 +1,6 @@
+[admin]
+password = "QCYFQS4CZVnPcRw9pNkAxjWvb1O8J2AQ"
+
 [raft]
 heartbeat_ms = 250
 min_election_ms = 500

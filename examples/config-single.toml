@@ -1,3 +1,6 @@
+[admin]
+password = "QCYFQS4CZVnPcRw9pNkAxjWvb1O8J2AQ"
+
 [[cluster.servers]]
 name = "single"
 

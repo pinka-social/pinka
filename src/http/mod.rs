@@ -1,3 +1,5 @@
+mod auth;
+
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
@@ -8,7 +10,7 @@ use axum::http::{Method, StatusCode, Uri};
 use axum::middleware::from_fn;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use pem_rfc7468::{encode_string as pem_encode, LineEnding};
 use ractor::ActorRef;
 use secrecy::ExposeSecret;
@@ -29,6 +31,8 @@ use crate::activity_pub::{
 use crate::config::RuntimeConfig;
 use crate::feed_slurp::FeedSlurpMsg;
 use crate::raft::{get_raft_local_client, LogEntryValue, RaftClientMsg};
+
+use self::auth::admin_basic_auth;
 
 #[derive(Debug, Deserialize)]
 struct PageParams {
@@ -67,8 +71,16 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
     }
     let app = Router::new()
         .route("/.well-known/webfinger", get(get_webfinger))
-        .route("/users/{id}", get(get_actor).post(post_actor))
-        .route("/users/{id}/outbox", get(get_outbox).post(post_outbox))
+        .route("/users/{id}", get(get_actor))
+        .route(
+            "/users/{id}",
+            post(post_actor).layer(from_fn(admin_basic_auth)),
+        )
+        .route("/users/{id}/outbox", get(get_outbox))
+        .route(
+            "/users/{id}/outbox",
+            post(post_outbox).layer(from_fn(admin_basic_auth)),
+        )
         .route(
             "/users/{id}/inbox",
             post(post_inbox).layer(from_fn(validate_request)),
@@ -76,8 +88,12 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
         .route("/users/{id}/followers", get(get_followers))
         .route("/as/objects/{obj_key}", get(get_object_by_id))
         .route("/as/objects/{obj_key}/{prop}", get(get_object_likes_shares))
-        .route("/as/admin/ingest_feed", post(post_ingest_feed))
+        .route(
+            "/as/admin/ingest_feed",
+            post(post_ingest_feed).layer(from_fn(admin_basic_auth)),
+        )
         .fallback(get_object_by_iri)
+        .layer(Extension(config.init.admin.clone()))
         .with_state(config.clone());
     let listener = TcpListener::bind(format!("0.0.0.0:{}", config.server.http.port)).await?;
     axum::serve(listener, app).await?;
@@ -206,7 +222,7 @@ async fn get_webfinger(
             return Err(StatusCode::BAD_REQUEST);
         };
         let user_index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
-        if user_index.find_one(&uid).map_err(ise)?.is_some() {
+        if user_index.find_one(uid).map_err(ise)?.is_some() {
             let jrd = json!({
                 "subject": subject,
                 "links": [

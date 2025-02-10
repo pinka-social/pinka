@@ -42,7 +42,7 @@ aws-lc-rs = "1.12.2"
 base64ct = { version = "1.6.0", features = ["alloc"] }
 const-oid = { version = "0.9.6", features = ["db"] }
 pem-rfc7468 = { version = "0.7.0", features = ["alloc"] }
-secrecy = "0.10.3"
+secrecy = { version = "0.10.3", features = ["serde"] }
 sha2 = "0.10.8"
 # feed slurping
 feed-rs = "2.3.1"
