@@ -4,9 +4,7 @@ mod config;
 mod feed_slurp;
 mod flags;
 mod http;
-mod manhole;
 mod raft;
-mod repl;
 mod supervisor;
 
 use std::fs::{self, File};
@@ -19,7 +17,7 @@ use ractor::Actor;
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{error, info};
 
-use self::config::{ActivityPubConfig, Config, FeedSlurpConfig, ReplConfig, RuntimeConfig};
+use self::config::{ActivityPubConfig, Config, FeedSlurpConfig, RuntimeConfig};
 use self::flags::{Dump, Pinka, PinkaCmd, RaftCmd, Serve};
 use self::raft::{LogEntry, RaftSerDe};
 use self::supervisor::Supervisor;
@@ -43,15 +41,6 @@ async fn main() -> Result<()> {
     }
 
     let server = config.cluster.servers[flags.server.unwrap_or_default()].clone();
-
-    if matches!(flags.subcommand, PinkaCmd::Repl(_)) {
-        let repl_config = ReplConfig {
-            init: config,
-            server,
-        };
-        repl::run(repl_config).await?;
-        return Ok(());
-    }
 
     let keyspace_name = config.database.path.join(&server.name);
     let mut keyspace_lock = RwLock::new(File::create(keyspace_name.join("lock"))?);

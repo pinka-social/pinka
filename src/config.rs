@@ -114,12 +114,6 @@ pub(crate) struct RuntimeConfig {
     pub(crate) keyspace: Keyspace,
 }
 
-#[derive(Clone)]
-pub(crate) struct ReplConfig {
-    pub(crate) init: Config,
-    pub(crate) server: ServerConfig,
-}
-
 impl Default for RaftConfig {
     fn default() -> Self {
         Self {

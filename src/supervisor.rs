@@ -10,7 +10,6 @@ use crate::flags::Serve;
 use crate::raft::{RaftServer, RaftServerMsg, StateMachineMsg};
 
 use super::cluster::{ClusterMaint, ClusterMaintMsg};
-use super::manhole::{Manhole, ManholeMsg};
 
 pub(crate) struct Supervisor;
 
@@ -40,14 +39,6 @@ impl Actor for Supervisor {
         Actor::spawn_linked(
             Some("cluster_maint".into()),
             ClusterMaint,
-            (server.clone(), config.clone()),
-            myself.get_cell(),
-        )
-        .await?;
-
-        Actor::spawn_linked(
-            Some("manhole".into()),
-            Manhole,
             (server.clone(), config.clone()),
             myself.get_cell(),
         )
@@ -123,16 +114,6 @@ impl Actor for Supervisor {
                     Actor::spawn_linked(
                         Some("cluster_maint".into()),
                         ClusterMaint,
-                        (state.server.clone(), state.config.clone()),
-                        myself.get_cell(),
-                    )
-                    .await?;
-                }
-                if matches!(actor_cell.is_message_type_of::<ManholeMsg>(), Some(true)) {
-                    info!(target: "supervision", error, "manhole crashed, restarting...");
-                    Actor::spawn_linked(
-                        Some("manhole".into()),
-                        Manhole,
                         (state.server.clone(), state.config.clone()),
                         myself.get_cell(),
                     )

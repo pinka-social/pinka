@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use minicbor::{Decode, Encode};
 use ractor::{ActorRef, DerivedActorRef, RpcReplyPort};
 use ractor_cluster::RactorClusterMessage;
@@ -42,21 +42,12 @@ impl ClientResult {
     pub(crate) fn ok() -> ClientResult {
         ClientResult::Ok(vec![])
     }
-    pub(crate) fn is_ok(&self) -> bool {
-        matches!(self, ClientResult::Ok(_))
-    }
 }
 
 impl From<Vec<u8>> for ClientResult {
     fn from(value: Vec<u8>) -> Self {
         ClientResult::Ok(value)
     }
-}
-
-pub(crate) fn get_raft_client(name: &str) -> Result<DerivedActorRef<RaftClientMsg>> {
-    let raft_worker: ActorRef<RaftMsg> =
-        ActorRef::where_is(name.into()).context("raft_worker is not running")?;
-    Ok(raft_worker.get_derived())
 }
 
 pub(crate) fn get_raft_local_client() -> Result<DerivedActorRef<RaftClientMsg>> {

@@ -55,9 +55,6 @@ impl Create<'_> {
                 .augment_node("object", "attributedTo", value);
         Create(obj)
     }
-    pub(crate) fn get_object(&self) -> Option<Object> {
-        self.0.get_node_object("object")
-    }
 }
 
 impl<'a> From<Create<'a>> for Object<'a> {

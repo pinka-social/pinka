@@ -58,8 +58,7 @@ impl IdObjIndex {
         let iter = self
             .index
             .range((start, end))
-            .filter(Result::is_ok)
-            .map(Result::unwrap)
+            .flatten()
             .map(|(key, val)| (IdObjIndexKey::from(key.as_ref()), val))
             .filter(|(key, _)| key.id() == id);
         match (first, last) {
