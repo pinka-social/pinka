@@ -4,9 +4,8 @@ use anyhow::Result;
 use reqwest::header::HeaderMap;
 use reqwest::{header, Client};
 use serde_json::Value;
-use tracing::{error, info};
+use tracing::error;
 
-// Name your user agent after your app?
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 #[derive(Clone)]
@@ -44,7 +43,6 @@ impl Mailman {
         Ok(response.json().await?)
     }
     pub(super) async fn post(&self, inbox: &str, headers: HeaderMap, body: &str) -> Result<()> {
-        info!(target: "apub", ?headers, "simulate mailman posting to {inbox}");
         let response = self
             .client
             .post(inbox)
