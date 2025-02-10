@@ -1,6 +1,7 @@
 # Pinka 🦋
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
+[![crates.io](https://img.shields.io/crates/v/pinka.svg)](crates.io/crates/pinka)
 
 A highly available, ActivityPub-powered commenting system that bridges the gap
 between web comments and the Fediverse. Perfect for blogs looking to engage with
