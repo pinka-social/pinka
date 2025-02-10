@@ -57,8 +57,8 @@ Just deploy and run!
 ## 🚀 Quick Start
 
 ```bash
-# Installation instructions here
-🚧
+cargo install --locked pinka
+pinka run -c examples/config-single.toml
 ```
 
 ## 📖 Documentation
