@@ -1,4 +1,5 @@
 mod auth;
+mod content_type;
 
 use std::str::FromStr;
 
@@ -33,6 +34,7 @@ use crate::feed_slurp::FeedSlurpMsg;
 use crate::raft::{get_raft_local_client, LogEntryValue, RaftClientMsg};
 
 use self::auth::admin_basic_auth;
+use self::content_type::ActivityStreamsJson;
 
 #[derive(Debug, Deserialize)]
 struct PageParams {
@@ -103,7 +105,7 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
 async fn get_object_by_id(
     State(config): State<RuntimeConfig>,
     Path(obj_key): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<ActivityStreamsJson<Value>, StatusCode> {
     spawn_blocking(move || {
         let obj_key = ObjectKey::from_str(&obj_key)
             .context("invalid UUID")
@@ -119,7 +121,7 @@ async fn get_object_by_iri(
     State(config): State<RuntimeConfig>,
     method: Method,
     uri: Uri,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<ActivityStreamsJson<Value>, StatusCode> {
     if !matches!(method, Method::GET) {
         return Err(StatusCode::METHOD_NOT_ALLOWED);
     }
@@ -144,7 +146,7 @@ async fn get_object_by_iri(
 fn blocking_get_object(
     config: &RuntimeConfig,
     obj_key: ObjectKey,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<ActivityStreamsJson<Value>, StatusCode> {
     let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
     let obj_repo = ObjectRepo::new(config.keyspace.clone()).map_err(ise)?;
     info!(%obj_key, "loading object");
@@ -167,9 +169,9 @@ fn blocking_get_object(
                     "totalItems": shares
                 }),
             );
-            return Ok(Json(object.into()));
+            return Ok(ActivityStreamsJson(Json(object.into())));
         }
-        return Ok(Json(object.into()));
+        return Ok(ActivityStreamsJson(Json(object.into())));
     }
     Err(StatusCode::NOT_FOUND)
 }
@@ -177,7 +179,7 @@ fn blocking_get_object(
 async fn get_object_likes_shares(
     State(config): State<RuntimeConfig>,
     Path((obj_key, prop)): Path<(String, String)>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<ActivityStreamsJson<Value>, StatusCode> {
     if prop != "likes" && prop != "shares" {
         return Err(StatusCode::NOT_FOUND);
     }
@@ -192,12 +194,12 @@ async fn get_object_likes_shares(
             "shares" => ctx_index.count_shares(&iri),
             _ => unreachable!(),
         };
-        Ok(Json(json!({
+        Ok(ActivityStreamsJson(Json(json!({
             "@context": "https://www.w3.org/ns/activitystreams",
             "id": format!("{}/as/objects/{obj_key}/{prop}", config.init.activity_pub.base_url),
             "type": "Collection",
             "totalItems": count
-        })))
+        }))))
     })
     .await
     .context("task failed")
@@ -251,7 +253,7 @@ async fn get_webfinger(
 async fn get_actor(
     State(config): State<RuntimeConfig>,
     Path(uid): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<ActivityStreamsJson<Value>, StatusCode> {
     spawn_blocking(move || {
         let user_index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
         let crypto_repo = CryptoRepo::new(config.keyspace.clone()).map_err(ise)?;
@@ -275,7 +277,7 @@ async fn get_actor(
             let pem = pem_encode("PUBLIC KEY", LineEnding::LF, pub_key.as_ref())
                 .expect("must encode public key to PEM");
             let actor = raw_actor.enrich_with(&config.init.activity_pub, &pem);
-            return Ok(Json(actor.into()));
+            return Ok(ActivityStreamsJson(Json(actor.into())));
         }
         Err(StatusCode::NOT_FOUND)
     })
@@ -329,7 +331,7 @@ async fn get_outbox(
     State(config): State<RuntimeConfig>,
     Path(uid): Path<String>,
     Query(params): Query<PageParams>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<ActivityStreamsJson<Value>, StatusCode> {
     spawn_blocking(move || {
         let index = OutboxIndex::new(config.keyspace.clone()).map_err(ise)?;
         let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
@@ -412,7 +414,7 @@ async fn get_outbox(
                     config.init.activity_pub.base_url
                 ));
             }
-            Ok(Json(outbox.into_page().into()))
+            Ok(ActivityStreamsJson(Json(outbox.into_page().into())))
         } else {
             let outbox = Collection::new()
                 .id(format!(
@@ -431,7 +433,7 @@ async fn get_outbox(
                 ))
                 .total_items(index.count(&uid))
                 .ordered();
-            Ok(Json(outbox.into()))
+            Ok(ActivityStreamsJson(Json(outbox.into())))
         }
     })
     .await
@@ -529,7 +531,7 @@ async fn get_followers(
     State(config): State<RuntimeConfig>,
     Path(uid): Path<String>,
     Query(params): Query<PageParams>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<ActivityStreamsJson<Value>, StatusCode> {
     spawn_blocking(move || {
         let index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
         if params.has_page() {
@@ -575,7 +577,7 @@ async fn get_followers(
                     config.init.activity_pub.base_url
                 ));
             }
-            Ok(Json(followers.into_page().into()))
+            Ok(ActivityStreamsJson(Json(followers.into_page().into())))
         } else {
             let followers = Collection::new()
                 .id(format!(
@@ -594,7 +596,7 @@ async fn get_followers(
                 ))
                 .total_items(index.count_followers(&uid))
                 .ordered();
-            Ok(Json(followers.into()))
+            Ok(ActivityStreamsJson(Json(followers.into())))
         }
     })
     .await
