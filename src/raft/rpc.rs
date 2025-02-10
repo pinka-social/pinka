@@ -5,7 +5,7 @@ use ractor::BytesConvertable;
 use super::client::ClientResult;
 use super::{LogEntry, LogEntryList, LogEntryValue};
 
-pub(crate) trait RaftSerDe {
+pub(super) trait RaftSerDe {
     fn to_bytes(&self) -> Result<Vec<u8>>
     where
         Self: Encode<()>,

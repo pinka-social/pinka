@@ -9,12 +9,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Deref, RangeBounds, RangeInclusive};
 use std::time::Duration;
 
-pub(crate) use self::client::{
-    get_raft_client, get_raft_local_client, ClientResult, RaftClientMsg,
-};
+pub(crate) use self::client::{get_raft_local_client, ClientResult, RaftClientMsg};
 pub(crate) use self::log_entry::{LogEntry, LogEntryList, LogEntryValue};
 use self::replicate::{ReplicateArgs, ReplicateMsg, ReplicateWorker};
-pub(crate) use self::rpc::RaftSerDe;
+use self::rpc::RaftSerDe;
 use self::rpc::{
     AdvanceCommitIndexMsg, AppendEntriesAsk, AppendEntriesReply, PeerId, RequestVoteAsk,
     RequestVoteReply,

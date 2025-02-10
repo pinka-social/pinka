@@ -25,7 +25,9 @@ impl IdObjIndex {
     }
     pub(super) fn count(&self, id: &str) -> u64 {
         // FIXME optimize scanning
-        self.index.prefix(id).count() as u64
+        let mut prefix = id.as_bytes().to_vec();
+        prefix.push(0);
+        self.index.prefix(prefix).count() as u64
     }
     /// Based on GraphQL Cursor Connections Specification
     ///
@@ -58,8 +60,7 @@ impl IdObjIndex {
         let iter = self
             .index
             .range((start, end))
-            .filter(Result::is_ok)
-            .map(Result::unwrap)
+            .flatten()
             .map(|(key, val)| (IdObjIndexKey::from(key.as_ref()), val))
             .filter(|(key, _)| key.id() == id);
         match (first, last) {

@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use crate::activity_pub::delivery::DeliveryQueueItem;
 use crate::activity_pub::machine::{ActivityPubCommand, C2sCommand, S2sCommand};
-use crate::activity_pub::model::{Actor, Collection, Create, Object};
+use crate::activity_pub::model::{Actor, Create, Object, OrderedCollection};
 use crate::activity_pub::{
     uuidgen, validate_request, ContextIndex, CryptoRepo, IriIndex, KeyMaterial, ObjectKey,
     ObjectRepo, OutboxIndex, UserIndex,
@@ -381,7 +381,7 @@ async fn get_outbox(
                     activity
                 })
                 .collect();
-            let mut outbox = Collection::new()
+            let mut outbox = OrderedCollection::new()
                 .id(format!(
                     "{}/users/{uid}/outbox?{query}",
                     config.init.activity_pub.base_url,
@@ -400,8 +400,7 @@ async fn get_outbox(
                     config.init.activity_pub.base_url,
                     Uuid::max().simple()
                 ))
-                .with_ordered_items(items)
-                .ordered();
+                .with_ordered_items(items);
             if let Some(id) = next {
                 outbox = outbox.next(format!(
                     "{}/users/{uid}/outbox?before={id}",
@@ -416,7 +415,7 @@ async fn get_outbox(
             }
             Ok(ActivityStreamsJson(Json(outbox.into_page().into())))
         } else {
-            let outbox = Collection::new()
+            let outbox = OrderedCollection::new()
                 .id(format!(
                     "{}/users/{uid}/outbox",
                     config.init.activity_pub.base_url
@@ -431,8 +430,7 @@ async fn get_outbox(
                     config.init.activity_pub.base_url,
                     Uuid::max().simple()
                 ))
-                .total_items(index.count(&uid))
-                .ordered();
+                .total_items(index.count(&uid));
             Ok(ActivityStreamsJson(Json(outbox.into())))
         }
     })
@@ -601,7 +599,7 @@ async fn get_followers(
                 (None, None)
             };
             let items = items.into_iter().rev().map(|it| it.1).collect();
-            let mut followers = Collection::new()
+            let mut followers = OrderedCollection::new()
                 .id(format!(
                     "{}/users/{uid}/followers?{query}",
                     config.init.activity_pub.base_url,
@@ -620,8 +618,7 @@ async fn get_followers(
                     config.init.activity_pub.base_url,
                     Uuid::max().simple()
                 ))
-                .with_ordered_items(items)
-                .ordered();
+                .with_ordered_items(items);
             if let Some(id) = next {
                 followers = followers.prev(format!(
                     "{}/users/{uid}/followers?before={id}",
@@ -636,7 +633,7 @@ async fn get_followers(
             }
             Ok(ActivityStreamsJson(Json(followers.into_page().into())))
         } else {
-            let followers = Collection::new()
+            let followers = OrderedCollection::new()
                 .id(format!(
                     "{}/users/{uid}/followers",
                     config.init.activity_pub.base_url
@@ -651,8 +648,7 @@ async fn get_followers(
                     config.init.activity_pub.base_url,
                     Uuid::max().simple()
                 ))
-                .total_items(index.count_followers(&uid))
-                .ordered();
+                .total_items(index.count_followers(&uid));
             Ok(ActivityStreamsJson(Json(followers.into())))
         }
     })

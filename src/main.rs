@@ -4,9 +4,7 @@ mod config;
 mod feed_slurp;
 mod flags;
 mod http;
-mod manhole;
 mod raft;
-mod repl;
 mod supervisor;
 
 use std::fs::{self, File};
@@ -14,14 +12,12 @@ use std::process::exit;
 
 use anyhow::Result;
 use fd_lock::RwLock;
-use fjall::PartitionCreateOptions;
 use ractor::Actor;
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{error, info};
 
-use self::config::{ActivityPubConfig, Config, FeedSlurpConfig, ReplConfig, RuntimeConfig};
-use self::flags::{Dump, Pinka, PinkaCmd, RaftCmd, Serve};
-use self::raft::{LogEntry, RaftSerDe};
+use self::config::{ActivityPubConfig, Config, RuntimeConfig};
+use self::flags::{Pinka, PinkaCmd};
 use self::supervisor::Supervisor;
 
 #[tokio::main]
@@ -44,16 +40,17 @@ async fn main() -> Result<()> {
 
     let server = config.cluster.servers[flags.server.unwrap_or_default()].clone();
 
-    if matches!(flags.subcommand, PinkaCmd::Repl(_)) {
-        let repl_config = ReplConfig {
-            init: config,
-            server,
-        };
-        repl::run(repl_config).await?;
-        return Ok(());
-    }
-
     let keyspace_name = config.database.path.join(&server.name);
+    if !keyspace_name.exists() {
+        fs::create_dir_all(&keyspace_name)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perm = keyspace_name.metadata()?.permissions();
+            perm.set_mode(0o700);
+            fs::set_permissions(&keyspace_name, perm)?;
+        }
+    }
     let mut keyspace_lock = RwLock::new(File::create(keyspace_name.join("lock"))?);
     let write_guard = match keyspace_lock.try_write() {
         Ok(guard) => guard,
@@ -81,13 +78,7 @@ async fn main() -> Result<()> {
     };
 
     match flags.subcommand {
-        PinkaCmd::Serve(flags) => serve(config, flags).await?,
-        PinkaCmd::Raft(raft) => match raft.subcommand {
-            RaftCmd::Dump(flags) => {
-                raft_dump(config, flags)?;
-            }
-        },
-        _ => {}
+        PinkaCmd::Serve(_) => serve(config).await?,
     }
 
     drop(write_guard);
@@ -95,13 +86,9 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn serve(config: RuntimeConfig, flags: Serve) -> Result<()> {
-    let (supervisor, actor_handle) = Actor::spawn(
-        Some("supervisor".into()),
-        Supervisor,
-        (flags, config.clone()),
-    )
-    .await?;
+async fn serve(config: RuntimeConfig) -> Result<()> {
+    let (supervisor, actor_handle) =
+        Actor::spawn(Some("supervisor".into()), Supervisor, config.clone()).await?;
 
     let http = http::serve(&config);
     let mut sigterm = signal(SignalKind::terminate())?;
@@ -122,23 +109,5 @@ async fn serve(config: RuntimeConfig, flags: Serve) -> Result<()> {
     supervisor.stop(None);
     actor_handle.await?;
 
-    Ok(())
-}
-
-fn raft_dump(config: RuntimeConfig, flags: Dump) -> Result<()> {
-    let log = config
-        .keyspace
-        .open_partition("raft_log", PartitionCreateOptions::default())?;
-    info!("Dump raft log entries");
-    info!("=====================");
-    for entry in log.range(flags.from.unwrap_or_default().to_be_bytes()..) {
-        let (key, value) = entry.unwrap();
-        let value = LogEntry::from_bytes(&value)?;
-        info!(
-            "key = {}, value = {:?}",
-            u64::from_be_bytes(key.as_ref().try_into().unwrap()),
-            value
-        );
-    }
     Ok(())
 }
