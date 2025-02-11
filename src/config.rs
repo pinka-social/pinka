@@ -103,8 +103,8 @@ impl Default for RaftConfig {
     fn default() -> Self {
         Self {
             heartbeat_ms: 100,
-            min_election_ms: 150,
-            max_election_ms: 300,
+            min_election_ms: 1000,
+            max_election_ms: 2000,
         }
     }
 }
