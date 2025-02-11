@@ -457,6 +457,15 @@ impl RaftState {
             self.last_log_term = last_log.term;
         }
 
+        if self.last_applied > self.last_log_index {
+            error!(
+                target: "raft",
+                last_applied=self.last_applied,
+                last_log_index=self.last_log_index,
+                "detected inconsistent state, last_applied is greater than last_log_index"
+            );
+        }
+
         Ok(())
     }
 
