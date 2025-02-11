@@ -184,7 +184,8 @@ impl ReplicateState {
             ?request,
             "send append_entries"
         );
-        let call_result = ractor::call!(self.peer, RaftMsg::AppendEntries, request);
+        // FIXME when timing out we should either reconnect or kill the worker
+        let call_result = ractor::call_t!(self.peer, RaftMsg::AppendEntries, 1000, request);
         if let Err(error) = call_result {
             warn!(target: "rpc", %error, "append_entries failed;");
             return Ok(());

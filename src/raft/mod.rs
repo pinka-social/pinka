@@ -29,7 +29,7 @@ use tokio::select;
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::task::spawn_blocking;
 use tokio::time::{sleep, Instant};
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::config::{RuntimeConfig, ServerConfig};
 
@@ -312,13 +312,15 @@ impl Actor for RaftWorker {
 
     async fn handle_supervisor_evt(
         &self,
-        myself: ActorRef<Self::Msg>,
+        _myself: ActorRef<Self::Msg>,
         message: SupervisionEvent,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            SupervisionEvent::ActorFailed(_, _) => {
-                myself.stop(Some("replication failed".into()));
+            SupervisionEvent::ActorFailed(_, error) => {
+                // myself.stop(Some("replication failed".into()));
+                error!(target: "raft", ?error, "replication failed");
+                panic!();
             }
             SupervisionEvent::ProcessGroupChanged(change) => {
                 if change.get_scope() != "raft" {
@@ -525,12 +527,23 @@ impl RaftState {
     }
 
     fn min_quorum_match_index(&self) -> u64 {
+        let server_count = self.config.init.cluster.servers.len();
         if self.match_index.is_empty() {
             return 0;
         }
         let mut values = self.match_index.values().collect::<Vec<_>>();
+        assert_eq!(server_count, values.len());
         values.sort_unstable();
-        *values[(values.len() - 1) / 2]
+        // Leader is always in position 0 with value 0 so we can use 1-index
+        // Quorum pos = majority
+        //            = (N / 2 + 1)
+        // For example in 5 server cluster we need to look at index 3
+        //         3 = 5 / 2 + 1
+        // For example in 4 server cluster we need to look at index 3
+        //         3 = 4 / 2 + 1
+        // For example in 3 server cluster we need to look at index 2
+        //         2 = 3 / 2 + 1
+        *values[server_count / 2 + 1]
     }
 
     fn voted_has_quorum(&self) -> bool {
@@ -545,6 +558,13 @@ impl RaftState {
         if cluster_size == 1 {
             return true;
         }
+        // Quorum = N / 2 + 1 (we need to count leader because we always vote for ourselves)
+        // For example in 5 server cluster we should receive 3 votes
+        //      3 > 5 / 2
+        // For example in 4 server cluster we should also receive 3 votes
+        //      3 > 4 / 2
+        // For example in 3 server cluster we should receive 2 votes
+        //      2 > 3 / 2
         self.votes_received.len() > cluster_size / 2
     }
 
@@ -645,6 +665,7 @@ impl RaftState {
     }
 
     async fn advance_commit_index(&mut self, peer_info: AdvanceCommitIndexMsg) -> Result<()> {
+        trace!(target: "raft", ?peer_info, "received advance_commit_index");
         if !matches!(self.role, RaftRole::Leader) {
             warn!(target: "raft", "advance_commit_index called as {:?}", self.role);
             return Ok(());
@@ -652,6 +673,7 @@ impl RaftState {
         if let Some(peer_id) = peer_info.peer_id {
             self.match_index.insert(peer_id, peer_info.match_index);
         }
+        trace!(target: "raft", match_index=?self.match_index, commit_index=self.commit_index, "current match_index");
         let new_commit_index = self.min_quorum_match_index();
         if self.commit_index >= new_commit_index {
             return Ok(());
@@ -734,6 +756,7 @@ impl RaftState {
         request: AppendEntriesAsk,
         reply: RpcReplyPort<AppendEntriesReply>,
     ) -> Result<()> {
+        trace!(target: "raft", ?request, "received append_entries");
         self.update_term(request.term).await?;
 
         if self.leader_id.is_some() {
@@ -763,7 +786,7 @@ impl RaftState {
                 "discard stale append_entries request from server {} in term {} (this server's term was {}",
                 request.leader_id,
                 request.term,
-                self.get_id()
+                self.current_term
             );
             // reject request
             if let Err(error) = reply.send(response) {
@@ -783,6 +806,7 @@ impl RaftState {
             self.commit_index = request.commit_index;
             response.success = true;
 
+            trace!(target: "raft", ?response, "done with request");
             if let Err(error) = reply.send(response) {
                 warn!(target: "rpc", %error, "send response to append_entries failed");
             }
@@ -797,6 +821,7 @@ impl RaftState {
             // conflict: remove 1 entry
             self.remove_last_log_entry().await?;
 
+            trace!(target: "raft", ?response, "conflict, remove 1 entry frou our log");
             if let Err(error) = reply.send(response) {
                 warn!(target: "rpc", %error, "send response to append_entries failed");
             }
@@ -810,6 +835,7 @@ impl RaftState {
             self.replicate_log_entries(request.entries).await?;
             response.success = true;
 
+            trace!(target: "raft", ?response, "replicated some log entries");
             if let Err(error) = reply.send(response) {
                 warn!(target: "rpc", %error, "send response to append_entries failed");
             }
