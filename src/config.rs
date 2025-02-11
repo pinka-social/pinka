@@ -68,6 +68,7 @@ pub(crate) struct ServerConfig {
 #[serde(default)]
 pub(crate) struct HttpConfig {
     pub(crate) listen: bool,
+    pub(crate) address: String,
     pub(crate) port: u16,
 }
 
@@ -75,6 +76,7 @@ impl Default for HttpConfig {
     fn default() -> Self {
         Self {
             listen: true,
+            address: "[::1]".to_string(),
             port: 8080,
         }
     }

@@ -1763,8 +1763,7 @@ dependencies = [
 [[package]]
 name = "ractor"
 version = "0.14.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d65972a0286ef14c43c6daafbac6cf15e96496446147683b2905292c35cc178"
+source = "git+https://github.com/kanru-contrib/ractor/?branch=feat-bind-to-dual-stack-any#facc43c150e4dba83f3fb11eb7469cd86fde1323"
 dependencies = [
  "bon",
  "dashmap",
@@ -1778,8 +1777,7 @@ dependencies = [
 [[package]]
 name = "ractor_cluster"
 version = "0.14.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a961ce1900a35b090c2c46f903f62692777cded1a80a64ab7cabfa9ac9978ac"
+source = "git+https://github.com/kanru-contrib/ractor/?branch=feat-bind-to-dual-stack-any#facc43c150e4dba83f3fb11eb7469cd86fde1323"
 dependencies = [
  "bytes",
  "prost",
@@ -1798,8 +1796,7 @@ dependencies = [
 [[package]]
 name = "ractor_cluster_derive"
 version = "0.14.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd9d6f3b9f9fb423149aea71fe8463146e3f309a4a28c1bab84e5bb350b17ea9"
+source = "git+https://github.com/kanru-contrib/ractor/?branch=feat-bind-to-dual-stack-any#facc43c150e4dba83f3fb11eb7469cd86fde1323"
 dependencies = [
  "quote",
  "syn",

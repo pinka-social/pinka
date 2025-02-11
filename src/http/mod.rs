@@ -97,7 +97,11 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
         .fallback(get_object_by_iri)
         .layer(Extension(config.init.admin.clone()))
         .with_state(config.clone());
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", config.server.http.port)).await?;
+    let listener = TcpListener::bind(format!(
+        "{}:{}",
+        config.server.http.address, config.server.http.port
+    ))
+    .await?;
     axum::serve(listener, app).await?;
     Ok(())
 }

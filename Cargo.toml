@@ -27,8 +27,10 @@ tokio = { version = "1.42", features = [
     "time",
 ] }
 # ractor actor and clustering
-ractor = { version = "0.14.6", features = ["cluster"] }
-ractor_cluster = { version = "0.14.6" }
+ractor = { version = "0.14.6", features = [
+    "cluster",
+], git = "https://github.com/kanru-contrib/ractor/", branch = "feat-bind-to-dual-stack-any" }
+ractor_cluster = { version = "0.14.6", git = "https://github.com/kanru-contrib/ractor/", branch = "feat-bind-to-dual-stack-any" }
 tokio-rustls = "0.26.1"
 # raft
 rand = "0.9.0"
