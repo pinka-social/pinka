@@ -39,7 +39,6 @@ axum = "0.8.1"
 bimap = "0.6.3"
 jiff = "0.1.26"
 reqwest = { version = "0.12.12", default-features = false, features = [
-    "http2",
     "rustls-tls-native-roots",
     "charset",
     "gzip",

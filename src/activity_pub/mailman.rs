@@ -21,6 +21,7 @@ impl Mailman {
     pub(super) fn new() -> Mailman {
         Mailman {
             client: Client::builder()
+                .http1_only()
                 .user_agent(APP_USER_AGENT)
                 .gzip(true)
                 .timeout(Duration::from_secs(10))
