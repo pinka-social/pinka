@@ -1,6 +1,8 @@
 use std::fmt::Debug;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
+use anyhow::Result;
 use fjall::Keyspace;
 use secrecy::SecretString;
 use serde::Deserialize;
@@ -14,6 +16,16 @@ pub(crate) struct Config {
     pub(crate) cluster: ClusterConfig,
     pub(crate) database: DatabaseConfig,
     pub(crate) activity_pub: ActivityPubConfig,
+}
+
+impl Config {
+    pub(super) fn open<P>(path: P) -> Result<Config>
+    where
+        P: AsRef<Path>,
+    {
+        let config_text = fs::read_to_string(path)?;
+        Ok(toml::from_str(&config_text)?)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
