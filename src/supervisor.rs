@@ -5,7 +5,7 @@ use anyhow::Result;
 use fjall::GarbageCollection;
 use ractor::{Actor, ActorProcessingErr, ActorRef, SupervisionEvent};
 use ractor_cluster::RactorMessage;
-use tracing::info;
+use tracing::{error, info};
 
 use crate::activity_pub::delivery::{DeliveryWorker, DeliveryWorkerInit, DeliveryWorkerMsg};
 use crate::activity_pub::machine::{ActivityPubMachine, ActivityPubMachineInit};
@@ -36,7 +36,15 @@ impl Actor for Supervisor {
         myself: ActorRef<Self::Msg>,
         config: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        Ok(SupervisorState { config, myself })
+        let state = SupervisorState { config, myself };
+
+        state.spawn_cluster_maint().await?;
+        state.spawn_raft_server().await?;
+        state.spawn_state_machine().await?;
+        state.spawn_delivery_worker().await?;
+        state.spawn_feed_slurp().await?;
+
+        Ok(state)
     }
 
     async fn post_start(
@@ -44,13 +52,7 @@ impl Actor for Supervisor {
         myself: ActorRef<Self::Msg>,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        info!(target: "lifecycle", "started");
-
-        state.spawn_cluster_maint().await?;
-        state.spawn_raft_server().await?;
-        state.spawn_state_machine().await?;
-        state.spawn_delivery_worker().await?;
-        state.spawn_feed_slurp().await?;
+        info!("started");
 
         myself.send_interval(Duration::from_secs(24 * 60 * 60), || {
             SupervisorMsg::KeyspaceMaint
@@ -85,39 +87,40 @@ impl Actor for Supervisor {
             ActorStarted(_) => {}
             ActorTerminated(_, _, _) => {}
             ActorFailed(actor_cell, error) => {
+                error!("{error:?}");
                 if actor_cell
                     .is_message_type_of::<ClusterMaintMsg>()
                     .is_some_and(is_true)
                 {
-                    info!(target: "supervision", error, "cluster_maint crashed, restarting...");
+                    info!("cluster_maint crashed, restarting...");
                     state.spawn_cluster_maint().await?;
                 }
                 if actor_cell
                     .is_message_type_of::<RaftServerMsg>()
                     .is_some_and(is_true)
                 {
-                    info!(target: "supervision", error, "raft server crashed, restarting...");
+                    info!("raft server crashed, restarting...");
                     state.spawn_raft_server().await?;
                 }
                 if actor_cell
                     .is_message_type_of::<StateMachineMsg>()
                     .is_some_and(is_true)
                 {
-                    info!(target: "supervision", error, "state machine crashed, restarting...");
+                    info!("state machine crashed, restarting...");
                     state.spawn_state_machine().await?;
                 }
                 if actor_cell
                     .is_message_type_of::<DeliveryWorkerMsg>()
                     .is_some_and(is_true)
                 {
-                    info!(target: "supervision", error, "delivery worker crashed, restarting...");
+                    info!("delivery worker crashed, restarting...");
                     state.spawn_delivery_worker().await?;
                 }
                 if actor_cell
                     .is_message_type_of::<FeedSlurpMsg>()
                     .is_some_and(is_true)
                 {
-                    info!(target: "supervision", error, "feed slurp worker crashed, restarting...");
+                    info!("feed slurp worker crashed, restarting...");
                     state.spawn_feed_slurp().await?;
                 }
             }
@@ -132,6 +135,7 @@ impl Actor for Supervisor {
 impl SupervisorState {
     fn gc_keyspace(&self) {
         let keyspace = self.config.keyspace.clone();
+        info!("garbage collect blobs in the keyspace...");
         thread::spawn(move || {
             let raft_log = keyspace
                 .open_partition("raft_log", Default::default())

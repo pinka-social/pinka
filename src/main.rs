@@ -11,7 +11,7 @@ use std::fs::{self, File};
 use std::path::Path;
 use std::process::exit;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use fd_lock::RwLock;
 use ractor::Actor;
 use tokio::signal::unix::{signal, SignalKind};
@@ -96,7 +96,7 @@ fn create_keyspace_folder(keyspace_name: &Path) -> Result<()> {
 }
 
 async fn serve(config: RuntimeConfig) -> Result<()> {
-    let (supervisor, actor_handle) =
+    let (supervisor, mut actor_handle) =
         Actor::spawn(Some("supervisor".into()), Supervisor, config.clone())
             .await
             .context("Failed to spawn supervisor")?;
@@ -106,6 +106,10 @@ async fn serve(config: RuntimeConfig) -> Result<()> {
     let mut sigint = signal(SignalKind::interrupt())?;
 
     tokio::select! {
+        _ = &mut actor_handle => {
+            error!("Supervisor thread crashed");
+            bail!("Supervisor thread crashed");
+        }
         _ = http => {
             error!("HTTP thread crashed");
         }
