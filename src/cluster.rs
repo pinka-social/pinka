@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{bail, Context};
+use anyhow::{bail, Context, Result};
 use ractor::concurrency::Duration;
 use ractor::{Actor, ActorProcessingErr, ActorRef, SupervisionEvent};
 use ractor_cluster::node::{NodeConnectionMode, NodeServerSessionInformation};
@@ -16,7 +16,7 @@ use tokio_rustls::rustls::{
     ClientConfig as TlsClientConfig, RootCertStore, ServerConfig as TlsServerConfig,
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::config::{RuntimeConfig, ServerConfig};
 
@@ -76,6 +76,7 @@ impl Actor for ClusterMaint {
         myself: ractor::ActorRef<Self::Msg>,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
+        info!("cluster_maint started, setting up connections");
         myself.send_interval(
             Duration::from_millis(
                 state
@@ -124,7 +125,9 @@ impl Actor for ClusterMaint {
         match message {
             SupervisionEvent::ActorStarted(_actor_cell) => {}
             SupervisionEvent::ActorTerminated(_actor_cell, _boxed_statee, _) => {}
-            SupervisionEvent::ActorFailed(_actor_cell, _errorr) => {
+            SupervisionEvent::ActorFailed(_actor_cell, error) => {
+                error!("{error:?}");
+                info!("node server crashed, restarting...");
                 state.spawn_node_server().await?;
                 state.connect_peers().await?;
             }
@@ -136,7 +139,12 @@ impl Actor for ClusterMaint {
 }
 
 impl ClusterState {
-    async fn spawn_node_server(&self) -> Result<ActorRef<NodeServerMessage>, ActorProcessingErr> {
+    async fn spawn_node_server(&self) -> Result<ActorRef<NodeServerMessage>> {
+        // TODO: should we stop the program if we can't read the cert files?
+        //       or should we just log a warning and continue?
+        //       1. stop the program, manual intervention is needed
+        //       2. log a warning and continue, but may cause crash looping. (current implementation)
+        //          Add a retry timeout to prevent crash looping?
         let encryption_mode = if self.config.init.cluster.use_mtls {
             IncomingEncryptionMode::Tls(self.get_tls_acceptor().await?)
         } else {
@@ -160,8 +168,8 @@ impl ClusterState {
         Ok(node_server)
     }
 
-    async fn connect_peers(&self) -> Result<(), ActorProcessingErr> {
-        let node_server = match ActorRef::<NodeServerMessage>::where_is("node_server".into()) {
+    async fn connect_peers(&self) -> Result<()> {
+        let node_server = match ActorRef::where_is("node_server".into()) {
             Some(node_server) => node_server,
             None => self.spawn_node_server().await?,
         };
@@ -179,7 +187,10 @@ impl ClusterState {
                 None
             };
             ractor::concurrency::spawn(async move {
-                info!(target: "raft", "connecting to {}@{}:{}", peer.name, peer.hostname, peer.port);
+                info!(
+                    "connecting to {}@{}:{}",
+                    peer.name, peer.hostname, peer.port
+                );
                 let conn_result = if let Some(tls_connector) = tls_connector {
                     ractor_cluster::client_connect_enc(
                         &node_server,
@@ -198,15 +209,19 @@ impl ClusterState {
                     )
                     .await
                 };
-                if conn_result.is_err() {
-                    warn!(target: "raft", "unable to connect to {}@{}:{}", peer.name, peer.hostname, peer.port);
+                if let Err(error) = conn_result {
+                    warn!("Error: {}", error);
+                    warn!(
+                        "unable to connect to {}@{}:{}",
+                        peer.name, peer.hostname, peer.port
+                    );
                 }
             });
         }
         Ok(())
     }
 
-    fn get_cert_dir(&self) -> anyhow::Result<PathBuf> {
+    fn get_cert_dir(&self) -> Result<PathBuf> {
         self.config
             .init
             .cluster
@@ -215,14 +230,10 @@ impl ClusterState {
             .context("cluster.cert_dir must be defined when use_mtls is true")
     }
 
-    async fn get_root_store(
-        &self,
-        extra_roots: &[PathBuf],
-    ) -> Result<Arc<RootCertStore>, ActorProcessingErr> {
+    async fn get_root_store(&self, extra_roots: &[PathBuf]) -> Result<Arc<RootCertStore>> {
         let mut roots = RootCertStore::empty();
 
         let cert_dir = self.get_cert_dir()?;
-        info!(target: "session", "loading CA certificates");
         for cert_name in self
             .config
             .init
@@ -238,21 +249,26 @@ impl ClusterState {
                 );
                 continue;
             }
-            match CertificateDer::from_pem_slice(&tokio::fs::read(cert_dir.join(cert_name)).await?)
-            {
-                Ok(cert) => roots.add(cert)?,
-                Err(_) => {
-                    warn!("\"{}\" is not a certificate, skipped", cert_name.display());
+            let pem = match tokio::fs::read(cert_dir.join(cert_name)).await {
+                Ok(pem) => pem,
+                Err(error) => {
+                    warn!("Error: {}", error);
+                    warn!("\"{}\" can not read file, skipped", cert_name.display());
+                    continue;
                 }
+            };
+            if let Err(error) = CertificateDer::from_pem_slice(&pem)
+                .context("Parse pem file failed")
+                .and_then(|cert| roots.add(cert).context("Add certificate to store failed"))
+            {
+                warn!("{:?}", error);
+                warn!("\"{}\" is not a certificate, skipped", cert_name.display());
             }
         }
         Ok(Arc::new(roots))
     }
 
-    async fn get_cert_chain(
-        &self,
-        cert_names: &[PathBuf],
-    ) -> Result<Vec<CertificateDer<'static>>, ActorProcessingErr> {
+    async fn get_cert_chain(&self, cert_names: &[PathBuf]) -> Result<Vec<CertificateDer<'static>>> {
         let cert_dir = self.get_cert_dir()?;
         let mut cert_chain = vec![];
         for cert_name in cert_names {
@@ -263,10 +279,18 @@ impl ClusterState {
                 );
                 continue;
             }
-            match CertificateDer::from_pem_slice(&tokio::fs::read(cert_dir.join(cert_name)).await?)
-            {
+            let pem = match tokio::fs::read(cert_dir.join(cert_name)).await {
+                Ok(pem) => pem,
+                Err(error) => {
+                    warn!("Error: {}", error);
+                    warn!("\"{}\" can not read file, skipped", cert_name.display());
+                    continue;
+                }
+            };
+            match CertificateDer::from_pem_slice(&pem).context("Parse pem file failed") {
                 Ok(cert) => cert_chain.push(cert.into_owned()),
-                Err(_) => {
+                Err(error) => {
+                    warn!("{:?}", error);
                     warn!("\"{}\" is not a certificate, skipped", cert_name.display());
                 }
             }
@@ -274,49 +298,56 @@ impl ClusterState {
         Ok(cert_chain)
     }
 
-    async fn get_priv_key(&self, path: Option<&PathBuf>) -> anyhow::Result<PrivateKeyDer<'static>> {
-        if path.is_none() {
+    async fn get_priv_key(&self, path: Option<&PathBuf>) -> Result<PrivateKeyDer<'static>> {
+        let Some(path) = path else {
             bail!("must have client_key to use mtls");
-        }
-        let path = path.unwrap();
-        let cert_dir = self.get_cert_dir()?;
+        };
         if path.is_absolute() {
             bail!("\"{}\" is not a relative path to cert_dir", path.display());
         }
-        PrivateKeyDer::from_pem_slice(&tokio::fs::read(cert_dir.join(path)).await?)
-            .context("Failed to read private key")
+        let cert_dir = self.get_cert_dir()?;
+        PrivateKeyDer::from_pem_slice(
+            &tokio::fs::read(cert_dir.join(path))
+                .await
+                .context("Failed to read private key")?,
+        )
+        .context("Failed to parse private key")
     }
 
-    async fn get_tls_acceptor(&self) -> Result<TlsAcceptor, ActorProcessingErr> {
+    async fn get_tls_acceptor(&self) -> Result<TlsAcceptor> {
+        info!("loading server CA certificates");
         let roots = self.get_root_store(&self.server.server_ca_certs).await?;
 
-        info!(target: "session", "loading server certificates");
+        info!("loading server certificates");
         let cert_chain = self.get_cert_chain(&self.server.server_cert_chain).await?;
 
-        info!(target: "session", "loading server private key");
+        info!("loading server private key");
         let priv_key = self.get_priv_key(self.server.server_key.as_ref()).await?;
 
         let client_verifier = WebPkiClientVerifier::builder(roots).build()?;
         Ok(TlsAcceptor::from(Arc::new(
             TlsServerConfig::builder()
                 .with_client_cert_verifier(client_verifier)
-                .with_single_cert(cert_chain, priv_key)?,
+                .with_single_cert(cert_chain, priv_key)
+                .context("Building TLS server failed")?,
         )))
     }
 
-    async fn get_tls_connector(&self) -> Result<TlsConnector, ActorProcessingErr> {
+    async fn get_tls_connector(&self) -> Result<TlsConnector> {
+        info!("loading client CA certificates");
         let roots = self.get_root_store(&self.server.client_ca_certs).await?;
 
-        info!(target: "session", "loading client certificates");
+        info!("loading client certificates");
         let cert_chain = self.get_cert_chain(&self.server.client_cert_chain).await?;
 
-        info!(target: "session", "loading client private key");
+        info!("loading client private key");
         let priv_key = self.get_priv_key(self.server.client_key.as_ref()).await?;
 
         Ok(TlsConnector::from(Arc::new(
             TlsClientConfig::builder()
                 .with_root_certificates(roots)
-                .with_client_auth_cert(cert_chain, priv_key)?,
+                .with_client_auth_cert(cert_chain, priv_key)
+                .context("Building TLS client failed")?,
         )))
     }
 }
@@ -330,13 +361,13 @@ impl NodeEventSubscription for NodeEventListener {
 
     fn node_session_disconnected(&self, ses: NodeServerSessionInformation) {
         if let Some(peer_name) = ses.peer_name {
-            if let Some(cluster_maint) =
-                ActorRef::<ClusterMaintMsg>::where_is("cluster_maint".into())
-            {
+            if let Some(cluster_maint) = ActorRef::where_is("cluster_maint".into()) {
                 if let Some((server_name, _hostname)) = peer_name.name.split_once('@') {
-                    cluster_maint
-                        .cast(ClusterMaintMsg::ServerDisconnected(server_name.to_string()))
-                        .expect("unable to send message to cluster_maint");
+                    ractor::cast!(
+                        cluster_maint,
+                        ClusterMaintMsg::ServerDisconnected(server_name.to_string())
+                    )
+                    .expect("unable to send message to cluster_maint");
                 }
             }
         }
@@ -344,13 +375,13 @@ impl NodeEventSubscription for NodeEventListener {
 
     fn node_session_authenicated(&self, ses: NodeServerSessionInformation) {
         if let Some(peer_name) = ses.peer_name {
-            if let Some(cluster_maint) =
-                ActorRef::<ClusterMaintMsg>::where_is("cluster_maint".into())
-            {
+            if let Some(cluster_maint) = ActorRef::where_is("cluster_maint".into()) {
                 if let Some((server_name, _hostname)) = peer_name.name.split_once('@') {
-                    cluster_maint
-                        .cast(ClusterMaintMsg::ServerConnected(server_name.to_string()))
-                        .expect("unable to send message to cluster_maint");
+                    ractor::cast!(
+                        cluster_maint,
+                        ClusterMaintMsg::ServerConnected(server_name.to_string())
+                    )
+                    .expect("unable to send message to cluster_maint");
                 }
             }
         }

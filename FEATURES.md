@@ -77,7 +77,9 @@
             - [ ] Forwarding from Inbox
             - [x] Shared Inbox Delivery
 - [x] WebFinger
+- [ ] Webmention
 - [ ] NodeInfo
+- [ ] RESTful endpoints for webui
 - [ ] Security
     - [x] HTTP Signature cavage-12 (HS2019)
         - [x] Sign
@@ -85,5 +87,6 @@
     - [ ] HTTP Signature RFC 9421
         - [ ] Sign
         - [ ] Verify
-- [ ] RESTful endpoints for webui
-- [ ] Webmention
+- [ ] Observibility
+    - [ ] Health check
+    - [ ] Metrics
