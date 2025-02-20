@@ -17,10 +17,10 @@ enum Envelope {
 
 pub(crate) fn to_bytes(object: impl Into<Value>) -> Result<Vec<u8>> {
     let value = object.into();
-    minicbor::to_vec(Envelope::V1(value.into())).context("unable to serialize payload")
+    minicbor::to_vec(Envelope::V1(value.into())).context("unable to serialize object")
 }
 pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Object<'static>> {
-    let Envelope::V1(value) = minicbor::decode(bytes).context("unable to deserialize payload")?;
+    let Envelope::V1(value) = minicbor::decode(bytes).context("unable to deserialize object")?;
     Ok(Object::from(Value::from(value)))
 }
 

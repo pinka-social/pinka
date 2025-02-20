@@ -10,14 +10,15 @@ pub(crate) struct IriIndex {
 
 impl IriIndex {
     pub(crate) fn new(keyspace: Keyspace) -> Result<IriIndex> {
-        let index = keyspace.open_partition("iri_index", PartitionCreateOptions::default())?;
+        let index = keyspace
+            .open_partition("iri_index", PartitionCreateOptions::default())
+            .context("Failed to open IRI index")?;
         Ok(IriIndex { index })
     }
-    pub(crate) fn insert(&self, b: &mut Batch, iri: &str, obj_key: ObjectKey) -> Result<()> {
+    pub(crate) fn insert(&self, b: &mut Batch, iri: &str, obj_key: ObjectKey) {
         b.insert(&self.index, iri, obj_key);
-        Ok(())
     }
     pub(crate) fn find_one(&self, iri: &str) -> Result<Option<UserKey>> {
-        self.index.get(iri).context("failed to read from index")
+        self.index.get(iri).context("Failed to read from index")
     }
 }

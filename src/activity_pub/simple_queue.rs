@@ -63,7 +63,7 @@ impl SimpleQueue {
     pub(super) fn is_empty(&self) -> Result<bool> {
         self.messages
             .is_empty()
-            .context("unable to read from messages tree")
+            .context("Unable to read from queue messages")
     }
     pub(super) fn send_message(
         &self,
@@ -79,7 +79,7 @@ impl SimpleQueue {
             approximate_receive_count: 0,
         };
 
-        debug!(target: "sq", queue_name, ?key, ?message, "send message");
+        debug!(queue_name, ?key, ?message, "send message");
 
         let q_key = q_key(queue_name, key);
         let bytes = minicbor::to_vec(message)?;
@@ -130,7 +130,7 @@ impl SimpleQueue {
                 .strip_prefix(queue_name.as_bytes())
                 .expect("key should be prefixed with the queue name");
 
-            debug!(target: "sq", queue_name, ?key, ?message, "received message");
+            debug!(queue_name, ?key, ?message, "received message");
 
             return Ok(Some(ReceiveResult {
                 key: key.try_into()?,
@@ -152,7 +152,7 @@ impl SimpleQueue {
         if let Some(message) = self.messages.get(&q_key)? {
             let message: QueueMessage = minicbor::decode(&message)?;
             if message.receipt_handle == receipt_handle {
-                debug!(target: "sq", queue_name, ?key, ?message, "delete message");
+                debug!(queue_name, ?key, ?message, "delete message");
                 batch.remove(&self.messages, q_key.clone());
                 batch.remove(&self.visibility, q_key.clone());
             } else {

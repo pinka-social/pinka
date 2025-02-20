@@ -65,7 +65,8 @@ impl Actor for ActivityPubMachine {
                 queue,
             })
         })
-        .await?
+        .await
+        .context("Failed to create ActivityPubMachine")?
     }
 
     async fn handle(
@@ -165,11 +166,11 @@ pub(crate) struct S2sCommand {
 
 impl ActivityPubCommand {
     fn into_bytes(self) -> Result<Vec<u8>> {
-        minicbor::to_vec(&self).context("unable to serialize apub command")
+        minicbor::to_vec(&self).context("Unable to serialize apub command")
     }
 
     fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        minicbor::decode(bytes).context("unable to deserialize apub command")
+        minicbor::decode(bytes).context("Unable to deserialize apub command")
     }
 }
 
@@ -183,53 +184,79 @@ const MAILBOX: &str = "mailbox";
 
 impl State {
     async fn handle_command(&mut self, command: ActivityPubCommand) -> Result<ClientResult> {
-        info!(target: "apub", ?command, "received command");
+        // TODO refine logging
+        info!(?command, "received command");
 
         match command {
             ActivityPubCommand::UpdateUser(uid, object, key_material) => {
-                self.handle_update_user(uid, object, key_material).await?;
+                self.handle_update_user(uid, object, key_material)
+                    .await
+                    .context("Failed to handle UpdateUser command")?;
             }
             ActivityPubCommand::C2sCreate(cmd) => {
-                self.handle_c2s_create(cmd).await?;
+                self.handle_c2s_create(cmd)
+                    .await
+                    .context("Failed to handle C2sCreate command")?;
             }
             ActivityPubCommand::C2sAccept(cmd) => {
-                self.handle_c2s_accept(cmd).await?;
+                self.handle_c2s_accept(cmd)
+                    .await
+                    .context("Failed to handle C2sAccept command")?;
             }
             ActivityPubCommand::S2sCreate(cmd) => {
-                self.handle_s2s_create(cmd).await?;
+                self.handle_s2s_create(cmd)
+                    .await
+                    .context("Failed to handle S2sCreate command")?;
             }
             ActivityPubCommand::S2sDelete(cmd) => {
-                self.handle_s2s_delete(cmd).await?;
+                self.handle_s2s_delete(cmd)
+                    .await
+                    .context("Failed to handle S2sDelete command")?;
             }
             ActivityPubCommand::S2sLike(cmd) => {
-                self.handle_s2s_like(cmd).await?;
+                self.handle_s2s_like(cmd)
+                    .await
+                    .context("Failed to handle S2sLike command")?;
             }
             ActivityPubCommand::S2sDislike(cmd) => {
-                self.handle_s2s_dislike(cmd).await?;
+                self.handle_s2s_dislike(cmd)
+                    .await
+                    .context("Failed to handle S2sDislike command")?;
             }
             ActivityPubCommand::S2sFollow(cmd) => {
-                self.handle_s2s_follow(cmd).await?;
+                self.handle_s2s_follow(cmd)
+                    .await
+                    .context("Failed to handle S2sFollow command")?;
             }
             ActivityPubCommand::S2sUndo(cmd) => {
-                self.handle_s2s_undo(cmd).await?;
+                self.handle_s2s_undo(cmd)
+                    .await
+                    .context("Failed to handle S2sUndo command")?;
             }
             ActivityPubCommand::S2sUpdate(cmd) => {
-                self.handle_s2s_update(cmd).await?;
+                self.handle_s2s_update(cmd)
+                    .await
+                    .context("Failed to handle S2sUpdate command")?;
             }
             ActivityPubCommand::S2sAnnounce(cmd) => {
-                self.handle_s2s_announce(cmd).await?;
+                self.handle_s2s_announce(cmd)
+                    .await
+                    .context("Failed to handle S2sAnnounce command")?;
             }
             ActivityPubCommand::QueueDelivery(key, item) => {
                 let queue = self.queue.clone();
-                spawn_blocking(move || queue.send_message(MAILBOX, key, item.to_bytes()?))
-                    .await??;
+                let bytes = item.to_bytes()?;
+                spawn_blocking(move || queue.send_message(MAILBOX, key, bytes))
+                    .await
+                    .context("Failed to handle QueueDelivery command")??;
             }
             ActivityPubCommand::ReceiveDelivery(receipt_handle, now, visibility_timeout) => {
                 let queue = self.queue.clone();
                 if let Some(res) = spawn_blocking(move || {
                     queue.receive_message(MAILBOX, receipt_handle, now, visibility_timeout)
                 })
-                .await??
+                .await
+                .context("Failed to handle ReceiveDelivery command")??
                 {
                     return Ok(ClientResult::Ok(res.to_bytes()?));
                 }
@@ -237,7 +264,8 @@ impl State {
             ActivityPubCommand::AckDelivery(key, receipt_handle) => {
                 let queue = self.queue.clone();
                 spawn_blocking(move || queue.delete_message(MAILBOX, key, receipt_handle))
-                    .await??;
+                    .await
+                    .context("Failed to handle AckDelivery command")??;
             }
         }
 
@@ -258,7 +286,7 @@ impl State {
             let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
             user_index.insert(&mut b, &uid, user)?;
             if let Some(key_pair) = key_material {
-                crypto_repo.insert(&mut b, &uid, &key_pair)?;
+                crypto_repo.insert(&mut b, &uid, &key_pair);
             }
             b.commit()?;
             Ok(())
@@ -276,7 +304,7 @@ impl State {
         let create = match Create::try_from(object) {
             Ok(create) => create,
             Err(error) => {
-                error!(target: "apub", %error, "invalid object");
+                error!(?error, "invalid object");
                 return Ok(());
             }
         };
@@ -295,7 +323,7 @@ impl State {
                     .transpose()?
                 {
                     let Some(update) = create.get_node_object("object") else {
-                        error!(target: "apub", "activity should have an object");
+                        error!("activity should have an object");
                         return Ok(());
                     };
                     if update
@@ -365,7 +393,7 @@ impl State {
             spawn_blocking(move || -> Result<()> {
                 let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
                 obj_repo.insert(&mut b, obj_key, object)?;
-                ctx_index.insert(&mut b, &iri, obj_key)?;
+                ctx_index.insert(&mut b, &iri, obj_key);
                 b.commit()?;
                 Ok(())
             })
@@ -395,10 +423,10 @@ impl State {
             spawn_blocking(move || -> Result<()> {
                 let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
                 if let Some(activity_iri) = object.id() {
-                    iri_index.insert(&mut b, activity_iri, obj_key)?;
+                    iri_index.insert(&mut b, activity_iri, obj_key);
                 }
                 obj_repo.insert(&mut b, obj_key, object)?;
-                ctx_index.insert_likes(&mut b, &iri, obj_key)?;
+                ctx_index.insert_likes(&mut b, &iri, obj_key);
                 b.commit()?;
                 Ok(())
             })
@@ -425,10 +453,10 @@ impl State {
             spawn_blocking(move || -> Result<()> {
                 let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
                 if let Some(activity_iri) = object.id() {
-                    iri_index.insert(&mut b, activity_iri, obj_key)?;
+                    iri_index.insert(&mut b, activity_iri, obj_key);
                 }
                 obj_repo.insert(&mut b, obj_key, object)?;
-                user_index.insert_follower(&mut b, &uid, obj_key)?;
+                user_index.insert_follower(&mut b, &uid, obj_key);
                 b.commit()?;
                 Ok(())
             })
@@ -461,7 +489,7 @@ impl State {
                 if let Some(slice) = iri_index.find_one(iri)? {
                     undo_obj_key = Some(ObjectKey::try_from(slice.as_ref())?);
                 } else {
-                    warn!(target: "apub", "unknown activity id {iri} mentioned in Undo");
+                    warn!("unknown activity id {iri} mentioned in Undo");
                 }
                 if undo_obj_key.is_none() {
                     // The object does not have a known IRI.
@@ -474,18 +502,18 @@ impl State {
                         if activity.type_is("Like") {
                             // Undo Like
                             let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
-                            ctx_index.remove_likes(&mut b, object_iri, undo_obj_key)?;
+                            ctx_index.remove_likes(&mut b, object_iri, undo_obj_key);
                             b.commit()?;
                         }
                         if activity.type_is("Follow") {
                             // Undo Follow
                             let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
-                            user_index.remove_follower(&mut b, &uid, undo_obj_key)?;
+                            user_index.remove_follower(&mut b, &uid, undo_obj_key);
                             b.commit()?;
                         }
                     }
                 } else {
-                    warn!(target: "apub", "unknown obj_key {undo_obj_key} when trying to Undo");
+                    warn!("unknown obj_key {undo_obj_key} when trying to Undo");
                 }
             }
             Ok(())
@@ -532,7 +560,7 @@ impl State {
             spawn_blocking(move || -> Result<()> {
                 let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
                 obj_repo.insert(&mut b, obj_key, announce)?;
-                ctx_index.insert_shares(&mut b, &iri, obj_key)?;
+                ctx_index.insert_shares(&mut b, &iri, obj_key);
                 b.commit()?;
                 Ok(())
             })
