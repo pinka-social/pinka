@@ -193,9 +193,11 @@ mod tests {
         let queue = SimpleQueue::new(keyspace)?;
 
         // Test empty queue
-        assert!(queue
-            .receive_message(QUEUE_NAME, uuidgen(), 1, 30)?
-            .is_none());
+        assert!(
+            queue
+                .receive_message(QUEUE_NAME, uuidgen(), 1, 30)?
+                .is_none()
+        );
 
         // Send message
         queue.send_message(QUEUE_NAME, uuidgen(), b"test1")?;
@@ -211,9 +213,11 @@ mod tests {
         queue.delete_message(QUEUE_NAME, key, handle)?;
 
         // Verify deletion
-        assert!(queue
-            .receive_message(QUEUE_NAME, uuidgen(), 3, 30)?
-            .is_none());
+        assert!(
+            queue
+                .receive_message(QUEUE_NAME, uuidgen(), 3, 30)?
+                .is_none()
+        );
         Ok(())
     }
 
@@ -233,9 +237,11 @@ mod tests {
         } = queue.receive_message(QUEUE_NAME, handle1, 1, 1)?.unwrap();
 
         // Immediate retry should find nothing
-        assert!(queue
-            .receive_message(QUEUE_NAME, uuidgen(), 1, 1)?
-            .is_none());
+        assert!(
+            queue
+                .receive_message(QUEUE_NAME, uuidgen(), 1, 1)?
+                .is_none()
+        );
 
         // Wait longer than timeout
         let handle2 = uuidgen();
@@ -311,9 +317,11 @@ mod tests {
             handle.join().unwrap();
         }
 
-        assert!(queue
-            .receive_message(QUEUE_NAME, uuidgen(), SimpleQueue::now(), 30)?
-            .is_none());
+        assert!(
+            queue
+                .receive_message(QUEUE_NAME, uuidgen(), SimpleQueue::now(), 30)?
+                .is_none()
+        );
         Ok(())
     }
 
@@ -364,12 +372,16 @@ mod tests {
         }
 
         // Verify both queues are empty
-        assert!(queue
-            .receive_message("queue_a", uuidgen(), SimpleQueue::now(), 1)?
-            .is_none());
-        assert!(queue
-            .receive_message("queue_b", uuidgen(), SimpleQueue::now(), 1)?
-            .is_none());
+        assert!(
+            queue
+                .receive_message("queue_a", uuidgen(), SimpleQueue::now(), 1)?
+                .is_none()
+        );
+        assert!(
+            queue
+                .receive_message("queue_b", uuidgen(), SimpleQueue::now(), 1)?
+                .is_none()
+        );
 
         Ok(())
     }

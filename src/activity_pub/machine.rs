@@ -6,8 +6,8 @@ use tokio::task::spawn_blocking;
 use tracing::{error, info, warn};
 use uuid::Bytes;
 
-use crate::raft::{get_raft_applied, ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg};
 use crate::ActivityPubConfig;
+use crate::raft::{ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg, get_raft_applied};
 
 use super::delivery::DeliveryQueueItem;
 use super::model::{Actor as AsActor, Create, Object, Update};

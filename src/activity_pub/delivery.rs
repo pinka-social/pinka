@@ -6,18 +6,18 @@ use minicbor::{Decode, Encode};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
 use secrecy::ExposeSecret;
-use tokio::task::{spawn_blocking, JoinSet};
+use tokio::task::{JoinSet, spawn_blocking};
 use tracing::{error, info, warn};
 
-use crate::activity_pub::uuidgen;
-use crate::raft::{get_raft_local_client, ClientResult, LogEntryValue, RaftClientMsg};
 use crate::RuntimeConfig;
+use crate::activity_pub::uuidgen;
+use crate::raft::{ClientResult, LogEntryValue, RaftClientMsg, get_raft_local_client};
 
 use super::machine::ActivityPubCommand;
 use super::mailman::Mailman;
 use super::model::Object;
 use super::simple_queue::{ReceiveResult, SimpleQueue};
-use super::{hs2019, CryptoRepo, ObjectKey, ObjectRepo};
+use super::{CryptoRepo, ObjectKey, ObjectRepo, hs2019};
 
 pub(crate) struct DeliveryWorker;
 

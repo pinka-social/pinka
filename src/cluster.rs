@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use ractor::concurrency::Duration;
 use ractor::{Actor, ActorProcessingErr, ActorRef, SupervisionEvent};
 use ractor_cluster::node::{NodeConnectionMode, NodeServerSessionInformation};

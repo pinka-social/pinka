@@ -4,12 +4,12 @@ use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
 use serde_json::json;
 
+use crate::ActivityPubConfig;
 use crate::activity_pub::delivery::DeliveryQueueItem;
 use crate::activity_pub::machine::{ActivityPubCommand, C2sCommand};
 use crate::activity_pub::model::Object;
-use crate::activity_pub::{uuidgen, ObjectKey};
-use crate::raft::{get_raft_local_client, LogEntryValue, RaftClientMsg};
-use crate::ActivityPubConfig;
+use crate::activity_pub::{ObjectKey, uuidgen};
+use crate::raft::{LogEntryValue, RaftClientMsg, get_raft_local_client};
 
 pub(crate) struct FeedSlurpWorker;
 

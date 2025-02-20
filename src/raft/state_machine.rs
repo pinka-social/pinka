@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use ractor::{ActorRef, DerivedActorRef};
 use ractor_cluster::RactorMessage;
 

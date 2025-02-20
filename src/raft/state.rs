@@ -1,7 +1,7 @@
 use minicbor::{Decode, Encode};
 
-use super::rpc::RaftSerDe;
 use super::PeerId;
+use super::rpc::RaftSerDe;
 
 #[derive(Debug, Default, Clone, Encode, Decode)]
 pub(super) struct RaftSaved {
