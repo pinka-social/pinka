@@ -110,6 +110,7 @@ async fn get_object_by_id(
     State(config): State<RuntimeConfig>,
     Path(obj_key): Path<String>,
 ) -> Result<ActivityStreamsJson<Value>, StatusCode> {
+    info!(%obj_key, "handle get object by ID request");
     spawn_blocking(move || {
         let obj_key = ObjectKey::from_str(&obj_key)
             .context("invalid UUID")
@@ -126,6 +127,7 @@ async fn get_object_by_iri(
     method: Method,
     uri: Uri,
 ) -> Result<ActivityStreamsJson<Value>, StatusCode> {
+    info!(%uri, "handle get object by IRI request");
     if !matches!(method, Method::GET) {
         return Err(StatusCode::METHOD_NOT_ALLOWED);
     }
@@ -184,6 +186,7 @@ async fn get_object_likes_shares(
     State(config): State<RuntimeConfig>,
     Path((obj_key, prop)): Path<(String, String)>,
 ) -> Result<ActivityStreamsJson<Value>, StatusCode> {
+    info!(%obj_key, %prop, "handle get object likes/shares request");
     if prop != "likes" && prop != "shares" {
         return Err(StatusCode::NOT_FOUND);
     }
@@ -219,6 +222,7 @@ async fn get_webfinger(
     State(config): State<RuntimeConfig>,
     Query(params): Query<WebFingerParams>,
 ) -> Result<impl IntoResponse, StatusCode> {
+    info!(%params.resource, "handle webfinger request");
     spawn_blocking(move || {
         if !params.resource.starts_with("acct:") {
             return Err(StatusCode::BAD_REQUEST);
@@ -258,6 +262,7 @@ async fn get_actor(
     State(config): State<RuntimeConfig>,
     Path(uid): Path<String>,
 ) -> Result<ActivityStreamsJson<Value>, StatusCode> {
+    info!(%uid, "handle get actor request");
     spawn_blocking(move || {
         let user_index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
         let crypto_repo = CryptoRepo::new(config.keyspace.clone()).map_err(ise)?;
@@ -301,6 +306,7 @@ async fn post_actor(
     Query(params): Query<PostActorParams>,
     Json(value): Json<Value>,
 ) -> Result<(), StatusCode> {
+    info!(%uid, "handle post actor request");
     let object = Object::from(value);
     if object.type_is("Person") {
         let key_bytes = {
@@ -336,6 +342,7 @@ async fn get_outbox(
     Path(uid): Path<String>,
     Query(params): Query<PageParams>,
 ) -> Result<ActivityStreamsJson<Value>, StatusCode> {
+    info!(%uid, "handle get outbox request");
     spawn_blocking(move || {
         let index = OutboxIndex::new(config.keyspace.clone()).map_err(ise)?;
         let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
@@ -448,6 +455,7 @@ async fn post_outbox(
     Path(uid): Path<String>,
     Json(value): Json<Value>,
 ) -> Result<(), StatusCode> {
+    info!(%uid, "handle post outbox request");
     let object = Object::from(value);
     if !object.is_activity() {
         // Add actor info
@@ -500,6 +508,7 @@ async fn post_inbox(
     Path(uid): Path<String>,
     Json(value): Json<Value>,
 ) -> Result<(), StatusCode> {
+    info!(%uid, "handle post inbox request");
     let object = Object::from(value);
     if object.is_inbox_activity() {
         let client = get_raft_local_client().map_err(ise)?;
@@ -580,6 +589,7 @@ async fn get_followers(
     Path(uid): Path<String>,
     Query(params): Query<PageParams>,
 ) -> Result<ActivityStreamsJson<Value>, StatusCode> {
+    info!(%uid, "handle get followers request");
     spawn_blocking(move || {
         let index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
         // TODO generic collections handling
@@ -669,6 +679,10 @@ struct IngestFeed {
 }
 
 async fn post_ingest_feed(Json(ingest_feed): Json<IngestFeed>) -> Result<(), StatusCode> {
+    info!(%ingest_feed.uid, %ingest_feed.feed_url, "handle ingest feed request");
+    if ingest_feed.base_url.is_empty() || ingest_feed.feed_url.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     let Some(feed_slurp) = ActorRef::where_is("feed_slurp".to_string()) else {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     };
