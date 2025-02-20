@@ -12,11 +12,11 @@ use axum::middleware::from_fn;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
-use pem_rfc7468::{encode_string as pem_encode, LineEnding};
+use pem_rfc7468::{LineEnding, encode_string as pem_encode};
 use ractor::ActorRef;
 use secrecy::ExposeSecret;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::task::spawn_blocking;
 use tracing::info;
@@ -26,12 +26,12 @@ use crate::activity_pub::delivery::DeliveryQueueItem;
 use crate::activity_pub::machine::{ActivityPubCommand, C2sCommand, S2sCommand};
 use crate::activity_pub::model::{Actor, Create, Object, OrderedCollection};
 use crate::activity_pub::{
-    uuidgen, validate_request, ContextIndex, CryptoRepo, IriIndex, KeyMaterial, ObjectKey,
-    ObjectRepo, OutboxIndex, UserIndex,
+    ContextIndex, CryptoRepo, IriIndex, KeyMaterial, ObjectKey, ObjectRepo, OutboxIndex, UserIndex,
+    uuidgen, validate_request,
 };
 use crate::config::RuntimeConfig;
 use crate::feed_slurp::FeedSlurpMsg;
-use crate::raft::{get_raft_local_client, LogEntryValue, RaftClientMsg};
+use crate::raft::{LogEntryValue, RaftClientMsg, get_raft_local_client};
 
 use self::auth::admin_basic_auth;
 use self::content_type::ActivityStreamsJson;

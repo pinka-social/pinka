@@ -1,9 +1,9 @@
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use axum::http::HeaderValue;
 use reqwest::header::HeaderMap;
-use reqwest::{header, Client};
+use reqwest::{Client, header};
 use serde_json::Value;
 
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);

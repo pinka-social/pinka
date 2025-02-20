@@ -2,13 +2,13 @@ use std::collections::BTreeMap;
 use std::iter::Peekable;
 use std::str::Chars;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use aws_lc_rs::rand::SystemRandom;
 use aws_lc_rs::rsa::KeyPair;
 use aws_lc_rs::signature::{
-    UnparsedPublicKey, VerificationAlgorithm, ECDSA_P256K1_SHA256_ASN1, ECDSA_P256K1_SHA256_FIXED,
-    ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA256_FIXED, ED25519, RSA_PKCS1_2048_8192_SHA256,
-    RSA_PKCS1_SHA256, RSA_PSS_2048_8192_SHA256,
+    ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA256_FIXED, ECDSA_P256K1_SHA256_ASN1,
+    ECDSA_P256K1_SHA256_FIXED, ED25519, RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_SHA256,
+    RSA_PSS_2048_8192_SHA256, UnparsedPublicKey, VerificationAlgorithm,
 };
 use axum::body::{Body, Bytes};
 use axum::extract::Request;
@@ -46,7 +46,9 @@ pub(super) fn post_headers(
     let date = Timestamp::now().strftime(HTTP_DATE_FMT).to_string();
     let content_length = body.len();
 
-    let sig_body = format!("(request-target): post {path}\nhost: {host}\ndate: {date}\ndigest: SHA-256={digest}\ncontent-length: {content_length}");
+    let sig_body = format!(
+        "(request-target): post {path}\nhost: {host}\ndate: {date}\ndigest: SHA-256={digest}\ncontent-length: {content_length}"
+    );
     let rng = SystemRandom::new();
     let mut rsa_signature = vec![0; key_pair.public_modulus_len()];
     key_pair.sign(
@@ -406,10 +408,10 @@ mod tests {
 
     #[test]
     fn test_ed25519_sign_verify() {
+        use aws_lc_rs::signature::ED25519;
         use aws_lc_rs::signature::Ed25519KeyPair;
         use aws_lc_rs::signature::KeyPair as _;
         use aws_lc_rs::signature::UnparsedPublicKey;
-        use aws_lc_rs::signature::ED25519;
         use spki::SubjectPublicKeyInfoRef;
 
         // PKI
@@ -444,11 +446,11 @@ mod tests {
     #[test]
     fn test_ecdsa_sign_verify() {
         use aws_lc_rs::rand::SystemRandom;
+        use aws_lc_rs::signature::ECDSA_P256K1_SHA256_FIXED;
+        use aws_lc_rs::signature::ECDSA_P256K1_SHA256_FIXED_SIGNING;
         use aws_lc_rs::signature::EcdsaKeyPair;
         use aws_lc_rs::signature::KeyPair as _;
         use aws_lc_rs::signature::UnparsedPublicKey;
-        use aws_lc_rs::signature::ECDSA_P256K1_SHA256_FIXED;
-        use aws_lc_rs::signature::ECDSA_P256K1_SHA256_FIXED_SIGNING;
         use spki::SubjectPublicKeyInfoRef;
 
         // PKI

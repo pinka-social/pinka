@@ -1,9 +1,9 @@
 use std::str;
 
+use axum::Extension;
 use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::Extension;
 use base64ct::{Base64, Encoding};
 use reqwest::StatusCode;
 use secrecy::ExposeSecret;

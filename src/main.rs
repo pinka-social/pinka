@@ -11,10 +11,10 @@ use std::fs::{self, File};
 use std::path::Path;
 use std::process::exit;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use fd_lock::RwLock;
 use ractor::Actor;
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal};
 use tracing::{error, info};
 
 use self::config::{ActivityPubConfig, Config, RuntimeConfig};

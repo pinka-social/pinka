@@ -1,4 +1,4 @@
-use serde_json::{json, Number, Value};
+use serde_json::{Number, Value, json};
 
 pub(crate) struct OrderedCollection(Value);
 

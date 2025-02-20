@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 use std::time::Duration;
 
-pub(crate) use self::client::{get_raft_local_client, ClientResult, RaftClientMsg};
+pub(crate) use self::client::{ClientResult, RaftClientMsg, get_raft_local_client};
 use self::log_entry::RaftLog;
 pub(crate) use self::log_entry::{LogEntry, LogEntryList, LogEntryValue};
 use self::replicate::{ReplicateArgs, ReplicateMsg, ReplicateWorker};
@@ -19,17 +19,17 @@ use self::rpc::{
     RequestVoteReply,
 };
 use self::state::RaftSaved;
-pub(crate) use self::state_machine::{get_raft_applied, RaftAppliedMsg, StateMachineMsg};
+pub(crate) use self::state_machine::{RaftAppliedMsg, StateMachineMsg, get_raft_applied};
 
 use anyhow::{Context, Error, Result};
 use fjall::{KvSeparationOptions, PartitionCreateOptions, PartitionHandle, PersistMode};
-use ractor::{pg, Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent};
+use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent, pg};
 use ractor_cluster::{RactorClusterMessage, RactorMessage};
 use rand::Rng;
 use tokio::select;
-use tokio::sync::mpsc::{channel, Sender};
+use tokio::sync::mpsc::{Sender, channel};
 use tokio::task::spawn_blocking;
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::config::{RuntimeConfig, ServerConfig};
