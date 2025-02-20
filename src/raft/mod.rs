@@ -6,10 +6,11 @@ mod state;
 mod state_machine;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ops::{Deref, RangeBounds, RangeInclusive};
+use std::ops::Deref;
 use std::time::Duration;
 
 pub(crate) use self::client::{get_raft_local_client, ClientResult, RaftClientMsg};
+use self::log_entry::RaftLog;
 pub(crate) use self::log_entry::{LogEntry, LogEntryList, LogEntryValue};
 use self::replicate::{ReplicateArgs, ReplicateMsg, ReplicateWorker};
 use self::rpc::RaftSerDe;
@@ -20,7 +21,7 @@ use self::rpc::{
 use self::state::RaftSaved;
 pub(crate) use self::state_machine::{get_raft_applied, RaftAppliedMsg, StateMachineMsg};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Error, Result};
 use fjall::{KvSeparationOptions, PartitionCreateOptions, PartitionHandle, PersistMode};
 use ractor::{pg, Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent};
 use ractor_cluster::{RactorClusterMessage, RactorMessage};
@@ -64,7 +65,8 @@ impl Actor for RaftServer {
         state: &mut Self::State,
     ) -> std::result::Result<(), ActorProcessingErr> {
         if let SupervisionEvent::ActorFailed(_, error) = message {
-            info!(target: "supervision", error, "raft worker crashed, restarting...");
+            error!("{:?}", error);
+            info!("raft worker crashed, restarting...");
             Actor::spawn_linked(
                 Some(state.server.name.clone()),
                 RaftWorker,
@@ -91,7 +93,7 @@ enum RaftMsg {
     // TODO: add status code
     #[rpc]
     ClientRequest(LogEntryValue, RpcReplyPort<ClientResult>),
-    Applied(u64, ClientResult),
+    AppliedLog(u64, ClientResult),
 }
 
 /// Role played by the worker.
@@ -147,8 +149,8 @@ struct RaftState {
     /// monotonically).
     match_index: BTreeMap<PeerId, u64>,
 
-    /// Raft log partition
-    log: PartitionHandle,
+    /// Raft log
+    log: RaftLog,
 
     /// Volatile state. Index of highest log entry known to be committed
     /// (initialized to 0, increases monotonically).
@@ -224,16 +226,21 @@ impl Actor for RaftWorker {
                     .with_kv_separation(KvSeparationOptions::default()),
             )
         })
-        .await??;
+        .await?
+        .context("Failed to open raft_log")?;
 
         let keyspace = config.keyspace.clone();
         let restore = spawn_blocking(move || {
             keyspace.open_partition("raft_restore", PartitionCreateOptions::default())
         })
-        .await??;
+        .await?
+        .context("Failed to open raft_restore state")?;
 
         let mut state = RaftState::new(myself, config, log, restore);
-        state.restore_state().await?;
+        state
+            .restore_state()
+            .await
+            .context("Failed to restore raft state")?;
 
         Ok(state)
     }
@@ -243,7 +250,7 @@ impl Actor for RaftWorker {
         myself: ActorRef<Self::Msg>,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        info!(target: "lifecycle", "raft_worker started");
+        info!("raft_worker started");
 
         pg::join_scoped(
             "raft".into(),
@@ -251,7 +258,7 @@ impl Actor for RaftWorker {
             vec![myself.get_cell()],
         );
         pg::monitor_scope("raft".into(), myself.get_cell());
-        info!(target: "lifecycle", "joined raft process group");
+        info!("raft_worker joined raft process group and start monitoring changes");
 
         if !matches!(state.role, RaftRole::Leader) {
             state.set_election_timer();
@@ -273,37 +280,58 @@ impl Actor for RaftWorker {
                 if state.config.server.readonly_replica {
                     return Ok(());
                 }
-                state.handle_request_vote(request).await?;
+                state
+                    .handle_request_vote(request)
+                    .await
+                    .context("Failed to handle RequestVote")?;
             }
             RequestVoteResponse(reply) => {
                 if state.config.server.readonly_replica {
                     return Ok(());
                 }
-                state.handle_request_vote_response(reply).await?;
+                state
+                    .handle_request_vote_response(reply)
+                    .await
+                    .context("Failed to handle RequestVoteResponse")?;
             }
             AppendEntries(request, reply) => {
-                state.handle_append_entries(request, reply).await?;
+                state
+                    .handle_append_entries(request, reply)
+                    .await
+                    .context("Failed to handle AppendEntries")?;
             }
             ElectionTimeout => {
                 if state.config.server.readonly_replica {
                     return Ok(());
                 }
-                state.start_new_election().await?;
+                state
+                    .start_new_election()
+                    .await
+                    .context("Failed to start a new election")?;
             }
             AdvanceCommitIndex(peer_info) => {
                 if state.config.server.readonly_replica {
                     return Ok(());
                 }
-                state.advance_commit_index(peer_info).await?;
+                state
+                    .advance_commit_index(peer_info)
+                    .await
+                    .context("Failed to advance commit index")?;
             }
             UpdateTerm(new_term) => {
                 state.update_term(new_term).await?;
             }
             ClientRequest(request, reply) => {
-                state.handle_client_request(request, reply).await?;
+                state
+                    .handle_client_request(request, reply)
+                    .await
+                    .context("Failed to handle ClientRequest")?;
             }
-            Applied(last_applied, result) => {
-                state.handle_applied(last_applied, result).await?;
+            AppliedLog(last_applied, result) => {
+                state
+                    .handle_applied_log(last_applied, result)
+                    .await
+                    .context("Failed to handle AppliedLog")?;
             }
         }
 
@@ -318,32 +346,37 @@ impl Actor for RaftWorker {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             SupervisionEvent::ActorFailed(_, error) => {
-                // myself.stop(Some("replication failed".into()));
-                error!(target: "raft", ?error, "replication failed");
-                panic!();
+                error!("replication failed");
+                return Err(error);
             }
             SupervisionEvent::ProcessGroupChanged(change) => {
                 if change.get_scope() != "raft" {
                     return Ok(());
                 }
-                if matches!(state.role, RaftRole::Leader) {
-                    match change {
-                        pg::GroupChangeMessage::Join(_, _, members) => {
-                            for server in members {
-                                let server_name = server.get_name().unwrap();
-                                if !state.replicate_workers.contains_key(&server_name) {
-                                    info!(target: "raft", peer = server_name, "resume replicating");
-                                    state.spawn_one_replicate_worker(server.into()).await?;
-                                }
+                if !matches!(state.role, RaftRole::Leader) {
+                    return Ok(());
+                }
+                match change {
+                    pg::GroupChangeMessage::Join(_, _, members) => {
+                        for server in members {
+                            let server_name =
+                                server.get_name().expect("raft server should have name");
+                            if !state.replicate_workers.contains_key(&server_name) {
+                                info!(peer = server_name, "peer joined, resume replication");
+                                state
+                                    .spawn_one_replicate_worker(server.into())
+                                    .await
+                                    .context("Failed to spawn replication worker")?;
                             }
                         }
-                        pg::GroupChangeMessage::Leave(_, _, members) => {
-                            for server in members {
-                                let server_name = server.get_name().unwrap();
-                                if let Some(worker) = state.replicate_workers.remove(&server_name) {
-                                    info!(target: "raft", peer = server_name, "stop replicating");
-                                    worker.stop(Some("remote server disconnected".into()));
-                                }
+                    }
+                    pg::GroupChangeMessage::Leave(_, _, members) => {
+                        for server in members {
+                            let server_name =
+                                server.get_name().expect("raft server should have name");
+                            if let Some(worker) = state.replicate_workers.remove(&server_name) {
+                                info!(peer = server_name, "peer left, stop replication");
+                                worker.stop(Some("remote server disconnected".into()));
                             }
                         }
                     }
@@ -370,12 +403,7 @@ fn election_timer(myself: ActorRef<RaftMsg>, timeout: Duration) -> Sender<Durati
                 }
                 _ = &mut sleep => {
                     if let Err(ref error) = ractor::cast!(myself, RaftMsg::ElectionTimeout) {
-                        warn!(
-                            target: "raft",
-                            myself = %myself.get_id(),
-                            %error,
-                            "failed to send election timeout"
-                        );
+                        warn!(%error, "failed to send election timeout");
                     }
                     break;
                 }
@@ -402,7 +430,7 @@ impl RaftState {
             voted_for: None,
             votes_received: BTreeSet::new(),
             match_index: BTreeMap::new(),
-            log,
+            log: RaftLog::new(log),
             commit_index: 0,
             leader_id: None,
             last_log_term: 0,
@@ -426,7 +454,8 @@ impl RaftState {
             Ok(Some(value)) => RaftSaved::from_bytes(&value),
             _ => Ok(RaftSaved::default()),
         })
-        .await??;
+        .await?
+        .context("Failed to decode saved raft state")?;
 
         let RaftSaved {
             current_term,
@@ -434,34 +463,23 @@ impl RaftState {
             last_applied,
         } = saved;
 
-        info!(
-            target: "raft",
-            voted_for,
-            current_term,
-            last_applied,
-            "restored from state"
-        );
+        info!(voted_for, current_term, last_applied, "restored from state");
+
         self.current_term = current_term;
         self.voted_for = voted_for;
         self.last_queued = last_applied;
         self.last_applied = last_applied;
 
-        if let Ok(last_log) = self.get_last_log_entry().await {
-            info!(
-                target: "raft",
-                last_log_term = last_log.term,
-                last_log_index = last_log.index,
-                "restored from log"
-            );
+        if let Some(last_log) = self.log.get_last_log_entry().await? {
+            info!(last_log.term, last_log.index, "restored from raft_log");
             self.last_log_index = last_log.index;
             self.last_log_term = last_log.term;
         }
 
         if self.last_applied > self.last_log_index {
             error!(
-                target: "raft",
-                last_applied=self.last_applied,
-                last_log_index=self.last_log_index,
+                last_applied = self.last_applied,
+                last_log_index = self.last_log_index,
                 "detected inconsistent state, last_applied is greater than last_log_index"
             );
         }
@@ -482,16 +500,14 @@ impl RaftState {
             .durability(Some(PersistMode::SyncAll));
         let restore = self.restore.clone();
         spawn_blocking(move || {
-            saved
-                .to_bytes()
-                .context("Failed to serialize raft_saved state")
-                .and_then(|value| {
-                    batch.insert(&restore, "raft_saved", value.as_slice());
-                    batch.commit().context("Failed to persist change")
-                })
+            saved.to_bytes().and_then(|value| {
+                batch.insert(&restore, "raft_saved", value);
+                batch.commit()?;
+                Ok(())
+            })
         })
-        .await??;
-        Ok(())
+        .await?
+        .context("Failed to persist raft state")
     }
 
     async fn spawn_replicate_workers(&mut self) -> Result<()> {
@@ -501,7 +517,9 @@ impl RaftState {
             if server.get_name() == self.get_name() {
                 continue;
             }
-            self.spawn_one_replicate_worker(server.into()).await?;
+            self.spawn_one_replicate_worker(server.into())
+                .await
+                .context("Failed to spawn replication worker")?;
         }
         Ok(())
     }
@@ -513,10 +531,10 @@ impl RaftState {
         let server_name = server.get_name().unwrap();
         let observer = self
             .server_config_for(&server_name)
-            .with_context(|| format!("server {server_name} is not defined in config"))?
+            .with_context(|| format!("Server {server_name} is not defined in config"))?
             .readonly_replica;
 
-        info!(target: "raft", peer = server_name, observer, "spawn replicate worker");
+        info!(peer = server_name, observer, "spawn replication worker");
         let args = ReplicateArgs {
             config: self.config.clone(),
             raft: RaftShared {
@@ -536,7 +554,7 @@ impl RaftState {
     }
 
     fn min_quorum_match_index(&self) -> u64 {
-        let server_count = self.config.init.cluster.servers.len();
+        let server_count = self.active_server_count();
         if self.match_index.is_empty() {
             return 0;
         }
@@ -556,15 +574,8 @@ impl RaftState {
     }
 
     fn voted_has_quorum(&self) -> bool {
-        let cluster_size = self
-            .config
-            .init
-            .cluster
-            .servers
-            .iter()
-            .filter(|s| !s.readonly_replica)
-            .count();
-        if cluster_size == 1 {
+        let server_count = self.active_server_count();
+        if server_count == 1 {
             return true;
         }
         // Quorum = N / 2 + 1 (we need to count leader because we always vote for ourselves)
@@ -574,7 +585,7 @@ impl RaftState {
         //      3 > 4 / 2
         // For example in 3 server cluster we should receive 2 votes
         //      2 > 3 / 2
-        self.votes_received.len() > cluster_size / 2
+        self.votes_received.len() > server_count / 2
     }
 
     fn set_election_timer(&mut self) {
@@ -586,7 +597,7 @@ impl RaftState {
             self.role,
             RaftRole::Follower | RaftRole::Candidate
         ));
-        debug!(target: "raft", "will start election in {:?}", duration);
+        debug!("will start election in {:?}", duration);
 
         match &self.election_timer {
             Some(timer) if !timer.is_closed() => {
@@ -599,36 +610,30 @@ impl RaftState {
     }
 
     fn unset_election_timer(&mut self) {
-        debug!(target: "raft", "unset election timer");
+        debug!("unset election timer");
         self.election_timer = None;
     }
 
     async fn start_new_election(&mut self) -> Result<()> {
         if matches!(self.role, RaftRole::Leader) {
-            warn!(target: "raft", "starting a election as a leader");
+            warn!("starting a election as a leader");
         }
-        if let Some(leader_id) = &self.leader_id {
+        let new_term = self.current_term + 1;
+        if let Some(prev_leader_id) = &self.leader_id {
             info!(
-                target: "raft",
-                prev_leader_id = %leader_id,
-                new_term = self.current_term + 1,
-                "running for election (unresponsive leader)"
+                prev_leader_id,
+                new_term, "running for election (unresponsive leader)"
             );
         } else if matches!(self.role, RaftRole::Candidate) {
             info!(
-                target: "raft",
-                new_term = self.current_term + 1,
+                new_term,
                 "running for election (previous candidacy timed out)"
             );
         } else {
-            info!(
-                target: "raft",
-                new_term = self.current_term + 1,
-                "running for election (there was no leader)"
-            );
+            info!(new_term, "running for election (there was no leader)");
         }
         self.role = RaftRole::Candidate;
-        self.current_term += 1;
+        self.current_term = new_term;
         self.voted_for = None;
         self.votes_received.clear();
         self.leader_id = None;
@@ -642,13 +647,19 @@ impl RaftState {
 
     fn request_vote(&self) {
         assert!(matches!(self.role, RaftRole::Candidate));
+
+        info!(term = self.current_term, "requesting votes");
         for peer in pg::get_scoped_members(&"raft".into(), &RaftWorker::pg_name()) {
             let peer: ActorRef<RaftMsg> = peer.into();
-            if self
-                .server_config_for(&peer.get_name().unwrap())
-                .unwrap()
-                .readonly_replica
-            {
+            let Some(peer_name) = peer.get_name() else {
+                error!(remote_actor = ?peer.get_id(), "peer has no name, skipped");
+                continue;
+            };
+            let Some(server_config) = self.server_config_for(&peer_name) else {
+                error!(peer = peer_name, "peer has no server config, skipped");
+                continue;
+            };
+            if server_config.readonly_replica {
                 continue;
             }
 
@@ -659,53 +670,57 @@ impl RaftState {
                 last_log_term: self.last_log_term,
             };
 
-            info!(
-                target: "raft",
-                to = %peer.get_name().unwrap(),
-                term = request.term,
-                "request_vote"
-            );
+            info!(to = peer_name, term = request.term, "request_vote");
 
-            let call_result = ractor::cast!(peer, RaftMsg::RequestVote(request));
-            if let Err(error) = call_result {
-                warn!(target: "rpc", %error, "request_vote failed");
+            if let Err(error) = ractor::cast!(peer, RaftMsg::RequestVote(request)) {
+                warn!(%error, "request_vote failed");
             }
         }
     }
 
     async fn advance_commit_index(&mut self, peer_info: AdvanceCommitIndexMsg) -> Result<()> {
-        trace!(target: "raft", ?peer_info, "received advance_commit_index");
+        trace!(?peer_info, "received advance_commit_index");
         if !matches!(self.role, RaftRole::Leader) {
-            warn!(target: "raft", "advance_commit_index called as {:?}", self.role);
+            warn!("advance_commit_index called as {:?}", self.role);
             return Ok(());
         }
         if let Some(peer_id) = peer_info.peer_id {
-            self.match_index.insert(peer_id, peer_info.match_index);
+            let prev_match_index = self
+                .match_index
+                .insert(peer_id.clone(), peer_info.match_index);
+            if let Some(prev_match_index) = prev_match_index {
+                if prev_match_index > peer_info.match_index {
+                    warn!(
+                        peer = peer_id,
+                        prev_match_index, peer_info.match_index, "match_index did not advance"
+                    );
+                }
+            }
         }
-        trace!(target: "raft", match_index=?self.match_index, commit_index=self.commit_index, "current match_index");
+        trace!(
+            match_index = ?self.match_index,
+            commit_index = self.commit_index,
+            "current match_index"
+        );
         let new_commit_index = self.min_quorum_match_index();
         if self.commit_index >= new_commit_index {
             return Ok(());
         }
         // At least one log entry must be from the current term to guarantee
         // that no server without them can be elected.
-        let log_entry = self.get_log_entry(new_commit_index).await;
-        if let Ok(entry) = log_entry {
-            if entry.term == self.current_term {
-                self.commit_index = new_commit_index;
-                info!(target: "raft", "new commit_index: {}", self.commit_index);
-                self.notify_state_change();
-            }
+        let log_entry = self.log.get_log_entry(new_commit_index).await?;
+        if log_entry.term == self.current_term {
+            info!("new commit_index: {new_commit_index}");
+            self.commit_index = new_commit_index;
+            self.notify_state_change();
+            self.apply_log_entries().await?;
         }
-
-        self.apply_log_entries().await?;
 
         Ok(())
     }
 
     async fn handle_request_vote(&mut self, request: RequestVoteAsk) -> Result<()> {
         info!(
-            target: "raft",
             candidate = request.candidate_name,
             current_term = self.current_term,
             request_term = request.term,
@@ -720,41 +735,38 @@ impl RaftState {
         let grant = request.term == self.current_term && log_ok && self.voted_for.is_none();
 
         if grant {
-            info!(
-                target: "raft",
-                candidate = request.candidate_name,
-                "voted"
-            );
+            info!(candidate = request.candidate_name, "voted for candidate");
             self.voted_for = Some(request.candidate_name.clone());
             self.persist_state().await?;
         } else {
             info!(
-                target: "raft",
                 candidate = request.candidate_name,
                 term_ok = (request.term == self.current_term),
                 log_ok,
                 voted_for = self.voted_for,
-                "vote rejected"
+                "rejected vote request"
             );
         }
 
-        for server in pg::get_scoped_members(&"raft".into(), &RaftWorker::pg_name()) {
-            if server.get_name().as_ref() == Some(&request.candidate_name) {
-                let response = RequestVoteReply {
-                    term: self.current_term,
-                    vote_granted: grant,
-                    vote_from: self.peer_id(),
-                };
-                let server: ActorRef<RaftMsg> = server.into();
-                if let Err(error) = ractor::cast!(server, RaftMsg::RequestVoteResponse(response)) {
-                    warn!(
-                        candidate = request.candidate_name,
-                        %error,
-                        "sending request vote reply failed"
-                    );
-                }
-                break;
+        let server = pg::get_scoped_members(&"raft".into(), &RaftWorker::pg_name())
+            .into_iter()
+            .find(|server| server.get_name().as_ref() == Some(&request.candidate_name));
+        if let Some(server) = server {
+            let response = RequestVoteReply {
+                term: self.current_term,
+                vote_granted: grant,
+                vote_from: self.peer_id(),
+            };
+            let server: ActorRef<RaftMsg> = server.into();
+            if let Err(error) = ractor::cast!(server, RaftMsg::RequestVoteResponse(response)) {
+                warn!(
+                    candidate = request.candidate_name,
+                    %error,
+                    "sending request vote reply failed"
+                );
             }
+        } else {
+            warn!(candidate = request.candidate_name, "candidate not found");
         }
 
         Ok(())
@@ -765,7 +777,7 @@ impl RaftState {
         request: AppendEntriesAsk,
         reply: RpcReplyPort<AppendEntriesReply>,
     ) -> Result<()> {
-        trace!(target: "raft", ?request, "received append_entries");
+        trace!(?request, "received append_entries");
         self.update_term(request.term).await?;
 
         if self.leader_id.is_some() {
@@ -777,7 +789,8 @@ impl RaftState {
         let log_ok = request.prev_log_index == 0
             || (request.prev_log_index > 0
                 && request.prev_log_index <= self.last_log_index
-                && request.prev_log_term == self.get_log_entry(request.prev_log_index).await?.term);
+                && request.prev_log_term
+                    == self.log.get_log_entry(request.prev_log_index).await?.term);
 
         let mut response = AppendEntriesReply {
             term: self.current_term,
@@ -789,7 +802,6 @@ impl RaftState {
                 && !log_ok)
         {
             trace!(
-                target: "raft",
                 server = request.leader_id,
                 term = request.term,
                 "discard stale append_entries request from server {} in term {} (this server's term was {}",
@@ -799,25 +811,25 @@ impl RaftState {
             );
             // reject request
             if let Err(error) = reply.send(response) {
-                warn!(target: "rpc", %error, "send response to append_entries failed");
+                warn!(%error, "send response to append_entries failed");
             }
             return Ok(());
         }
 
-        self.recognize_new_leader(&request.leader_id).await?;
+        self.recognize_new_leader(&request.leader_id);
 
         let index = request.prev_log_index + 1;
         if request.entries.is_empty()
             || (self.last_log_index >= index
-                && self.get_log_entry(index).await?.term == request.entries[0].term)
+                && self.log.get_log_entry(index).await?.term == request.entries[0].term)
         {
             // already done with request
             self.commit_index = request.commit_index;
             response.success = true;
 
-            trace!(target: "raft", ?response, "done with request");
+            trace!(?response, "done with request");
             if let Err(error) = reply.send(response) {
-                warn!(target: "rpc", %error, "send response to append_entries failed");
+                warn!(%error, "send response to append_entries failed");
             }
             self.apply_log_entries().await?;
             self.set_election_timer();
@@ -825,14 +837,21 @@ impl RaftState {
         }
         if !request.entries.is_empty()
             && self.last_log_index >= index
-            && self.get_log_entry(index).await?.term != request.entries[0].term
+            && self.log.get_log_entry(index).await?.term != request.entries[0].term
         {
             // conflict: remove 1 entry
-            self.remove_last_log_entry().await?;
+            let batch = self
+                .config
+                .keyspace
+                .batch()
+                .durability(Some(PersistMode::SyncAll));
+            self.log
+                .remove_last_log_entry(batch, self.last_log_index)
+                .await?;
 
-            trace!(target: "raft", ?response, "conflict, remove 1 entry frou our log");
+            trace!(?response, "conflict, remove 1 entry from our log");
             if let Err(error) = reply.send(response) {
-                warn!(target: "rpc", %error, "send response to append_entries failed");
+                warn!(%error, "send response to append_entries failed");
             }
             self.set_election_timer();
             return Ok(());
@@ -844,9 +863,9 @@ impl RaftState {
             self.replicate_log_entries(request.entries).await?;
             response.success = true;
 
-            trace!(target: "raft", ?response, "replicated some log entries");
+            trace!(?response, "replicated some log entries");
             if let Err(error) = reply.send(response) {
-                warn!(target: "rpc", %error, "send response to append_entries failed");
+                warn!(%error, "send response to append_entries failed");
             }
             self.apply_log_entries().await?;
             self.set_election_timer();
@@ -860,14 +879,13 @@ impl RaftState {
         self.update_term(response.term).await?;
 
         if response.term < self.current_term {
-            warn!(target: "raft", peer = response.vote_from, "discard stale vote response");
+            warn!(peer = response.vote_from, "discard stale vote response");
             return Ok(());
         }
 
         if response.term == self.current_term {
             if response.vote_granted {
                 info!(
-                    target: "raft",
                     peer = response.vote_from,
                     peer_term = response.term,
                     current_term = self.current_term,
@@ -876,7 +894,6 @@ impl RaftState {
                 if !matches!(self.role, RaftRole::Candidate) {
                     if matches!(self.role, RaftRole::Follower) {
                         warn!(
-                            target: "raft",
                             peer = response.vote_from,
                             current_role = ?self.role,
                             "received vote but not a candidate"
@@ -885,13 +902,14 @@ impl RaftState {
                     return Ok(());
                 }
                 self.votes_received.insert(response.vote_from);
-                info!(target: "raft", result = ?self.votes_received, "election poll");
+                info!(result = ?self.votes_received, "election poll");
                 if self.voted_has_quorum() {
-                    self.become_leader().await?;
+                    self.become_leader()
+                        .await
+                        .context("Failed to become leader")?;
                 }
             } else {
                 info!(
-                    target: "raft",
                     peer = response.vote_from,
                     peer_term = response.term,
                     current_term = self.current_term,
@@ -904,7 +922,7 @@ impl RaftState {
 
     async fn become_leader(&mut self) -> Result<()> {
         assert!(matches!(self.role, RaftRole::Candidate));
-        info!(target: "raft", "received quorum, becoming leader");
+        info!("received quorum, becoming leader");
         self.role = RaftRole::Leader;
         self.leader_id = None;
         self.voted_for = None;
@@ -916,17 +934,15 @@ impl RaftState {
         Ok(())
     }
 
-    async fn recognize_new_leader(&mut self, peer_id: &PeerId) -> Result<()> {
+    fn recognize_new_leader(&mut self, peer_id: &PeerId) {
         if self.leader_id.as_ref() != Some(peer_id) {
             self.leader_id = Some(peer_id.to_owned());
             info!(
-                target: "raft",
                 leader = self.leader_id,
                 term = self.current_term,
                 "recognized new leader",
             );
         }
-        Ok(())
     }
 
     async fn update_term(&mut self, new_term: u32) -> Result<()> {
@@ -942,11 +958,13 @@ impl RaftState {
         self.stop_children(None);
         self.replicate_workers.clear();
         self.pending_responses.clear();
-        self.persist_state().await?;
+        self.persist_state()
+            .await
+            .context("Failed to update current term")?;
         self.set_election_timer();
 
         if was_leader || self.election_timer.is_none() {
-            info!(target: "raft", "stepping down");
+            info!("stepping down");
         }
 
         Ok(())
@@ -958,12 +976,13 @@ impl RaftState {
         reply: RpcReplyPort<ClientResult>,
     ) -> Result<()> {
         if matches!(self.role, RaftRole::Leader) {
-            debug!(target: "raft", "received client request");
+            info!("received a new client request");
             let log_index = self.append_log(request).await?;
             self.pending_responses.insert(log_index, reply);
             return Ok(());
         }
         // Forward to leader
+        info!("received a new client request, forwarding to leader");
         if let Some(leader) = self.get_leader() {
             // DEADLOCK HAZARD: Leader needs our vote to confirm quorum so we
             // should not block our actor thread.
@@ -981,7 +1000,7 @@ impl RaftState {
         Ok(())
     }
 
-    async fn handle_applied(&mut self, last_applied: u64, result: ClientResult) -> Result<()> {
+    async fn handle_applied_log(&mut self, last_applied: u64, result: ClientResult) -> Result<()> {
         debug_assert!(self.last_applied <= last_applied);
 
         self.last_applied = last_applied;
@@ -992,12 +1011,16 @@ impl RaftState {
             self.set_election_timer();
         }
 
-        info!(target: "raft", last_queued=self.last_queued, last_applied=self.last_applied, "applied");
+        info!(
+            last_queued = self.last_queued,
+            last_applied = self.last_applied,
+            "applied log entry"
+        );
 
         if let Some(reply) = self.pending_responses.remove(&self.last_applied) {
-            debug!(target: "raft", "index {last_applied} applied, reply to client");
+            debug!("index {last_applied} applied, reply to client");
             if let Err(error) = reply.send(result) {
-                info!(target: "raft", %error, "failed to reply client request");
+                info!(%error, "failed to reply client request");
             }
         }
         Ok(())
@@ -1007,20 +1030,29 @@ impl RaftState {
         debug_assert!(self.last_queued >= self.last_applied);
 
         // TODO configurable machine name
-        if let Some(machine) = ActorRef::where_is("state_machine".into()) {
-            // TODO avoid message pile up
-            for log_entry in self
-                .log_entry_range(self.last_queued + 1..=self.commit_index)
-                .await?
-            {
-                ractor::cast!(machine, StateMachineMsg::Apply(log_entry))?;
+        async {
+            if let Some(machine) = ActorRef::where_is("state_machine".into()) {
+                // TODO avoid message pile up
+                for log_entry in self
+                    .log
+                    .log_entry_range(self.last_queued + 1..=self.commit_index)
+                    .await?
+                {
+                    ractor::cast!(machine, StateMachineMsg::Apply(log_entry))?;
+                }
+                self.last_queued = u64::max(self.last_queued, self.commit_index);
+            } else {
+                warn!("unable to apply log entries because state_machine is not running");
             }
-            self.last_queued = u64::max(self.last_queued, self.commit_index);
-        } else {
-            warn!(target: "raft", "unable to apply log entries because state_machine is not running");
+            trace!(
+                last_queued = self.last_queued,
+                last_applied = self.last_applied,
+                "queued log entries to apply"
+            );
+            Ok::<_, Error>(())
         }
-        trace!(target: "raft", last_queued=self.last_queued, last_applied=self.last_applied, "queued");
-        Ok(())
+        .await
+        .context("Failed to apply log entries")
     }
 
     fn server_config_for<'a>(&'a self, name: &str) -> Option<&'a ServerConfig> {
@@ -1046,50 +1078,6 @@ impl RaftState {
         None
     }
 
-    async fn get_last_log_entry(&self) -> Result<LogEntry> {
-        let log = self.log.clone();
-        spawn_blocking(move || {
-            log.last_key_value()
-                .context("get log entry failed")?
-                .ok_or_else(|| anyhow!("index out of range"))
-                .and_then(|(_, slice)| {
-                    LogEntry::from_bytes(&slice).context("failed to deserialize log entry")
-                })
-        })
-        .await?
-    }
-
-    async fn get_log_entry(&self, index: u64) -> Result<LogEntry> {
-        let log = self.log.clone();
-        spawn_blocking(move || {
-            log.get(index.to_be_bytes())
-                .context("get log entry failed")?
-                .ok_or_else(|| anyhow!("log entry index {index} does not exist"))
-                .and_then(|slice| {
-                    LogEntry::from_bytes(&slice).context("failed to deserialize log entry")
-                })
-        })
-        .await?
-    }
-
-    // TODO: fail on error?
-    async fn log_entry_range(&self, range: RangeInclusive<u64>) -> Result<Vec<LogEntry>> {
-        let log = self.log.clone();
-        spawn_blocking(move || {
-            log.range((
-                range.start_bound().map(|b| b.to_be_bytes()),
-                range.end_bound().map(|b| b.to_be_bytes()),
-            ))
-            .map(|r| {
-                r.context("get log entry failed").and_then(|(_, slice)| {
-                    LogEntry::from_bytes(&slice).context("failed to deserialize log entry")
-                })
-            })
-            .collect()
-        })
-        .await?
-    }
-
     async fn append_log(&mut self, value: LogEntryValue) -> Result<u64> {
         let index = self.last_log_index + 1;
         let new_log_entry = LogEntry {
@@ -1097,30 +1085,24 @@ impl RaftState {
             term: self.current_term,
             value,
         };
-        let mut batch = self
+        let batch = self
             .config
             .keyspace
             .batch()
             .durability(Some(PersistMode::SyncAll));
-        let log = self.log.clone();
-        let value_bytes = new_log_entry.to_bytes()?;
-        spawn_blocking(move || -> Result<()> {
-            batch.insert(&log, index.to_be_bytes(), value_bytes);
-            batch.commit()?;
-            Ok(())
-        })
-        .await??;
+        self.log.insert(batch, new_log_entry).await?;
         self.last_log_index = index;
         self.last_log_term = self.current_term;
 
         // special case single server mode
         if self.config.init.cluster.servers.len() == 1 {
-            debug!(target: "raft", "commit immediately for single server cluster");
+            debug!("commit immediately for single server cluster");
             self.advance_commit_index(AdvanceCommitIndexMsg {
                 peer_id: Some(self.peer_id()),
                 match_index: index,
             })
-            .await?;
+            .await
+            .context("Failed to advance commit index (single server mode)")?;
         }
 
         Ok(self.last_log_index)
@@ -1132,42 +1114,25 @@ impl RaftState {
         else {
             return Ok(());
         };
-        let mut batch = self
+        let batch = self
             .config
             .keyspace
             .batch()
             .durability(Some(PersistMode::SyncAll));
-        let log = self.log.clone();
-        spawn_blocking(move || -> Result<()> {
-            for entry in entries {
-                let value_bytes = entry.to_bytes()?;
-                batch.insert(&log, entry.index.to_be_bytes(), value_bytes);
-            }
-            batch.commit()?;
-            Ok(())
-        })
-        .await??;
+        self.log.insert_all(batch, entries).await?;
         self.last_log_index = last_log_index;
         self.last_log_term = last_log_term;
         Ok(())
     }
 
-    async fn remove_last_log_entry(&mut self) -> Result<()> {
-        let mut batch = self
-            .config
-            .keyspace
-            .batch()
-            .durability(Some(PersistMode::SyncAll));
-        let log = self.log.clone();
-        let last_log_index = self.last_log_index;
-        spawn_blocking(move || {
-            batch.remove(&log, last_log_index.to_be_bytes());
-            batch.commit()
-        })
-        .await??;
-        self.last_log_index -= 1;
-        self.last_log_term = self.get_log_entry(self.last_log_index).await?.term;
-        Ok(())
+    fn active_server_count(&self) -> usize {
+        self.config
+            .init
+            .cluster
+            .servers
+            .iter()
+            .filter(|s| !s.readonly_replica)
+            .count()
     }
 
     fn reset_match_index(&mut self) {
@@ -1184,9 +1149,13 @@ impl RaftState {
             current_term: self.current_term,
             commit_index: self.commit_index,
         };
-        info!(target: "raft", ?raft, "notify state change");
+        info!(
+            current_term = self.current_term,
+            commit_index = self.commit_index,
+            "notify state change to replication workers"
+        );
         for (id, worker) in self.replicate_workers.iter() {
-            if let Err(error) = worker.cast(ReplicateMsg::NotifyStateChange(raft)) {
+            if let Err(error) = ractor::cast!(worker, ReplicateMsg::NotifyStateChange(raft)) {
                 warn!(
                     %error,
                     peer = id,

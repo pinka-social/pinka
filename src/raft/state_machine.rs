@@ -17,7 +17,7 @@ pub(crate) enum RaftAppliedMsg {
 impl From<RaftAppliedMsg> for RaftMsg {
     fn from(value: RaftAppliedMsg) -> Self {
         match value {
-            RaftAppliedMsg::Applied(index, result) => RaftMsg::Applied(index, result),
+            RaftAppliedMsg::Applied(index, result) => RaftMsg::AppliedLog(index, result),
         }
     }
 }
@@ -25,7 +25,7 @@ impl From<RaftAppliedMsg> for RaftMsg {
 impl From<RaftMsg> for RaftAppliedMsg {
     fn from(value: RaftMsg) -> Self {
         match value {
-            RaftMsg::Applied(index, result) => RaftAppliedMsg::Applied(index, result),
+            RaftMsg::AppliedLog(index, result) => RaftAppliedMsg::Applied(index, result),
             _ => panic!("unsupported RaftAppliedMsg conversion"),
         }
     }
@@ -38,5 +38,5 @@ pub(crate) fn get_raft_applied() -> Result<DerivedActorRef<RaftAppliedMsg>> {
         let worker: ActorRef<RaftMsg> = cell.clone().into();
         return Ok(worker.get_derived());
     }
-    bail!("no local raft_worker")
+    bail!("raft service is not available")
 }
