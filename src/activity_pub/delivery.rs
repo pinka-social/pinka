@@ -7,7 +7,7 @@ use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
 use secrecy::ExposeSecret;
 use tokio::task::{spawn_blocking, JoinSet};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::activity_pub::uuidgen;
 use crate::raft::{get_raft_local_client, ClientResult, LogEntryValue, RaftClientMsg};
@@ -62,7 +62,8 @@ impl Actor for DeliveryWorker {
                 mailman,
             })
         })
-        .await?
+        .await
+        .context("Failed to create DeliveryWorker")?
     }
     async fn post_start(
         &self,
@@ -80,7 +81,11 @@ impl Actor for DeliveryWorker {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             DeliveryWorkerMsg::RunLoop => {
-                match state.handle_delivery().await {
+                match state
+                    .handle_delivery()
+                    .await
+                    .context("Failed to handle delivery")
+                {
                     // FIXME use enum
                     Ok(true) => {
                         // There might be more work to do, immediately schedule next loop
@@ -90,7 +95,8 @@ impl Actor for DeliveryWorker {
                         myself.send_after(RETRY_TIMEOUT, || DeliveryWorkerMsg::RunLoop);
                     }
                     Err(error) => {
-                        warn!(target: "apub", %error, "delivery loop failed");
+                        error!("{:?}", error);
+                        warn!("delivery loop failed, will retry in {:?}", RETRY_TIMEOUT);
                         myself.send_after(RETRY_TIMEOUT, || DeliveryWorkerMsg::RunLoop);
                     }
                 }
@@ -127,8 +133,9 @@ impl DeliveryWorkerState {
 
         // Retry limited times
         // TODO: make this configurable
-        if result.message.approximate_receive_count > 10 {
-            warn!(target: "apub", "give up, retried too many times");
+        let retry_count = result.message.approximate_receive_count;
+        if retry_count > 10 {
+            warn!("retried {retry_count} times, giving up");
             let command = ActivityPubCommand::AckDelivery(result.key, receipt_handle);
             let _ = ractor::call!(
                 raft_client,
@@ -152,7 +159,7 @@ impl DeliveryWorkerState {
         if let Some(object) = spawn_blocking(move || obj_repo.find_one(item.act_key)).await?? {
             // Get actor IRI
             let Some(actor_iri) = object.get_node_iri("actor") else {
-                warn!(target: "apub", ?object, "cannot deliver activity without actor property");
+                warn!(?object, "cannot deliver activity without actor property");
                 let command = ActivityPubCommand::AckDelivery(result.key, receipt_handle);
                 let _ = ractor::call!(
                     raft_client,
@@ -185,7 +192,11 @@ impl DeliveryWorkerState {
                 let value = self.mailman.fetch(iri).await?;
                 let object = Object::from(value);
                 if object.type_is("Collection") || object.type_is("OrderedCollection") {
-                    inboxes.extend(self.discover_inboxes(&object).await?);
+                    inboxes.extend(
+                        self.discover_inboxes(&object)
+                            .await
+                            .context("Failed to discover inboxes")?,
+                    );
                     continue;
                 }
                 if let Some(inbox) = object.get_str("inbox") {
@@ -208,14 +219,24 @@ impl DeliveryWorkerState {
                 let key_pair = KeyPair::from_pkcs8(key_material.expose_secret())?;
                 let mailman = self.mailman.clone();
                 join_set.spawn(async move {
+                    info!(%actor_iri, %inbox, "delivering activity");
                     let headers = hs2019::post_headers(&actor_iri, &inbox, &body, &key_pair)
-                        .expect("unable to sign");
+                        .expect("unable to sign http request");
                     mailman.post(&inbox, headers, &body).await
                 });
             }
-            join_set.join_all().await;
+            let mut success = true;
+            for result in join_set.join_all().await {
+                if let Err(error) = result {
+                    error!(?error, "failed to deliver activity");
+                    success = false;
+                }
+            }
+            if !success {
+                return Ok(false);
+            }
         } else {
-            error!(target: "apub", obj_key=%item.act_key, "cannot find object");
+            error!(obj_key=%item.act_key, "cannot find object");
         }
         // Ack
         // TODO always ack in case of unrecoverable error
@@ -274,9 +295,9 @@ pub(crate) struct DeliveryQueueItem {
 
 impl DeliveryQueueItem {
     pub(crate) fn to_bytes(&self) -> Result<Vec<u8>> {
-        minicbor::to_vec(self).context("failed to encode DeliveryQueueItem")
+        minicbor::to_vec(self).context("Failed to encode DeliveryQueueItem")
     }
     pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        minicbor::decode(bytes).context("failed to decode DeliveryQueueItem")
+        minicbor::decode(bytes).context("Failed to decode DeliveryQueueItem")
     }
 }

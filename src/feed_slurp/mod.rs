@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use feed_rs::model::Entry;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
@@ -54,7 +54,10 @@ impl Actor for FeedSlurpWorker {
                 uid,
                 base_url,
                 feed_url,
-            } => state.handle_ingest_feed(&uid, &base_url, &feed_url).await?,
+            } => state
+                .handle_ingest_feed(&uid, &base_url, &feed_url)
+                .await
+                .context("Failed to ingest feed")?,
         }
         Ok(())
     }

@@ -1,16 +1,13 @@
 use std::ops::Deref;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
-use fjall::PartitionHandle;
+use anyhow::Result;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
-use tokio::task::spawn_blocking;
 use tracing::{info, trace, warn};
 
 use super::log_entry::LogEntry;
-use super::rpc::RaftSerDe;
-use super::{AdvanceCommitIndexMsg, AppendEntriesAsk, RaftMsg, RaftShared, RuntimeConfig};
+use super::{AdvanceCommitIndexMsg, AppendEntriesAsk, RaftLog, RaftMsg, RaftShared, RuntimeConfig};
 
 pub(super) struct ReplicateWorker;
 
@@ -40,7 +37,7 @@ pub(super) struct ReplicateState {
     peer: ActorRef<RaftMsg>,
 
     /// Raft log
-    log: PartitionHandle,
+    log: RaftLog,
 
     /// Index of the next log entry to send to that peer.
     ///
@@ -71,7 +68,7 @@ pub(super) struct ReplicateArgs {
     /// Remote server's reference
     pub(super) peer: ActorRef<RaftMsg>,
     /// Raft log
-    pub(super) log: PartitionHandle,
+    pub(super) log: RaftLog,
     /// Index of the last entry in the leader's log.
     pub(super) last_log_index: u64,
     /// Whether this peer is only an observer.
@@ -108,7 +105,10 @@ impl Actor for ReplicateWorker {
         _myself: ActorRef<Self::Msg>,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        info!(target: "lifecycle", "started");
+        info!(
+            "replication worker for {} started",
+            state.peer.get_name().unwrap()
+        );
         state.run_loop().await?;
         Ok(())
     }
@@ -160,7 +160,7 @@ impl ReplicateState {
 
         let prev_log_index = self.next_index.saturating_sub(1);
         let prev_log_term = if prev_log_index > 0 {
-            self.get_log_entry(prev_log_index).await?.term
+            self.log.get_log_entry(prev_log_index).await?.term
         } else {
             0
         };
@@ -179,7 +179,6 @@ impl ReplicateState {
         };
 
         trace!(
-            target: "raft",
             peer = %self.peer.get_name().unwrap(),
             ?request,
             "send append_entries"
@@ -187,18 +186,20 @@ impl ReplicateState {
         // FIXME when timing out we should either reconnect or kill the worker
         let call_result = ractor::call_t!(self.peer, RaftMsg::AppendEntries, 1000, request);
         if let Err(error) = call_result {
-            warn!(target: "rpc", %error, "append_entries failed;");
+            warn!(%error, "append_entries failed");
             return Ok(());
         }
 
         let response = call_result.unwrap();
         if response.term < current_term {
-            warn!(target: "raft", term = response.term, "discard stale append_entries response");
+            warn!(
+                term = response.term,
+                "discard stale append_entries response"
+            );
             return Ok(());
         }
         if response.term > current_term {
             info!(
-                target: "raft",
                 peer = self.peer.get_name().unwrap(),
                 response_term = response.term,
                 current_term,
@@ -232,32 +233,8 @@ impl ReplicateState {
         Ok(())
     }
 
-    async fn get_log_entry(&self, index: u64) -> anyhow::Result<LogEntry> {
-        let log = self.log.clone();
-        spawn_blocking(move || {
-            log.get(index.to_be_bytes())
-                .context("get log entry failed")?
-                .ok_or_else(|| anyhow!("log entry index {index} does not exist"))
-                .and_then(|slice| {
-                    LogEntry::from_bytes(&slice).context("failed to deserialize log entry")
-                })
-        })
-        .await?
-    }
-
-    async fn get_log_entries(&self) -> anyhow::Result<Vec<LogEntry>> {
-        let mut entries = vec![];
-        let from = self.next_index.to_be_bytes();
-        let log = self.log.clone();
-        spawn_blocking(move || {
-            for rkv in log.range(from..).take(10) {
-                match rkv {
-                    Ok((_, v)) => entries.push(LogEntry::from_bytes(&v)?),
-                    Err(_) => bail!("failed to read all entries"),
-                }
-            }
-            Ok(entries)
-        })
-        .await?
+    async fn get_log_entries(&self) -> Result<Vec<LogEntry>> {
+        let from = self.next_index;
+        self.log.log_entry_range(from..from + 10).await
     }
 }

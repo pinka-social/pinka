@@ -96,7 +96,9 @@ pub(crate) async fn validate_request(
     let sig_params = parse_sig_params(signature_header).map_err(bad)?;
     if let Some(algorithm) = sig_params.get("algorithm") {
         if !["hs2019", "rsa-sha256"].contains(&algorithm.as_str()) {
-            warn!(target: "apub", "unknown http signature algorithm {algorithm} used, verification will likely fail");
+            warn!(
+                "unknown http signature algorithm {algorithm} used, verification will likely fail"
+            );
         }
     }
     let signature = Base64::decode_vec(sig_params.get("signature").ok_or(StatusCode::BAD_REQUEST)?)

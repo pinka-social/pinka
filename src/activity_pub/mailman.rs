@@ -5,7 +5,6 @@ use axum::http::HeaderValue;
 use reqwest::header::HeaderMap;
 use reqwest::{header, Client};
 use serde_json::Value;
-use tracing::error;
 
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 const APPLICATION_LD_JSON: HeaderValue = HeaderValue::from_static(
@@ -48,10 +47,9 @@ impl Mailman {
             .send()
             .await?;
         if response.error_for_status_ref().is_err() {
-            error!(target: "apub", ?response, "posting to {inbox} failed");
+            let code = response.status();
             let text = response.text().await?;
-            error!(target: "apub", text, "error response");
-            bail!("posting to {inbox} failed");
+            bail!("posting to {inbox} failed with error {code} {text}");
         }
         Ok(())
     }

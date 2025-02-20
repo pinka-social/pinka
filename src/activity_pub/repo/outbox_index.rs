@@ -44,9 +44,9 @@ impl OutboxIndex {
             .to_string();
         self.object_repo.insert(b, obj_key, obj)?;
         self.object_repo.insert(b, act_key, act)?;
-        self.iri_index.insert(b, &obj_iri, obj_key)?;
+        self.iri_index.insert(b, &obj_iri, obj_key);
         self.outbox_index
-            .insert(b, IdObjIndexKey::new(&uid, act_key))?;
+            .insert(b, IdObjIndexKey::new(&uid, act_key));
         Ok(())
     }
 
@@ -73,7 +73,7 @@ impl OutboxIndex {
         self.object_repo.insert(b, obj_key, obj)?;
         self.object_repo.insert(b, act_key, act)?;
         self.outbox_index
-            .insert(b, IdObjIndexKey::new(&uid, act_key))?;
+            .insert(b, IdObjIndexKey::new(&uid, act_key));
         Ok(())
     }
     pub(crate) fn count(&self, uid: &str) -> u64 {

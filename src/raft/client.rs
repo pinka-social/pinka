@@ -57,5 +57,5 @@ pub(crate) fn get_raft_local_client() -> Result<DerivedActorRef<RaftClientMsg>> 
         let worker: ActorRef<RaftMsg> = cell.clone().into();
         return Ok(worker.get_derived());
     }
-    bail!("no local raft_worker")
+    bail!("raft service is not available")
 }

@@ -15,13 +15,11 @@ impl IdObjIndex {
     pub(super) fn new(index: PartitionHandle) -> IdObjIndex {
         IdObjIndex { index }
     }
-    pub(super) fn insert(&self, b: &mut Batch, id_obj_key: IdObjIndexKey) -> Result<()> {
+    pub(super) fn insert(&self, b: &mut Batch, id_obj_key: IdObjIndexKey) {
         b.insert(&self.index, id_obj_key, []);
-        Ok(())
     }
-    pub(super) fn remove(&self, b: &mut Batch, id_obj_key: IdObjIndexKey) -> Result<()> {
+    pub(super) fn remove(&self, b: &mut Batch, id_obj_key: IdObjIndexKey) {
         b.remove(&self.index, id_obj_key);
-        Ok(())
     }
     pub(super) fn count(&self, id: &str) -> u64 {
         // FIXME optimize scanning
