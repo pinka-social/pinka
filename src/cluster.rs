@@ -126,8 +126,8 @@ impl Actor for ClusterMaint {
             SupervisionEvent::ActorStarted(_actor_cell) => {}
             SupervisionEvent::ActorTerminated(_actor_cell, _boxed_statee, _) => {}
             SupervisionEvent::ActorFailed(_actor_cell, error) => {
-                error!("{error:?}");
-                info!("node server crashed, restarting...");
+                error!("{error:#}");
+                error!("node server crashed, restarting...");
                 state.spawn_node_server().await?;
                 state.connect_peers().await?;
             }

@@ -95,8 +95,8 @@ impl Actor for DeliveryWorker {
                         myself.send_after(RETRY_TIMEOUT, || DeliveryWorkerMsg::RunLoop);
                     }
                     Err(error) => {
-                        error!("{:?}", error);
-                        warn!("delivery loop failed, will retry in {:?}", RETRY_TIMEOUT);
+                        warn!("{error:#}");
+                        warn!("delivery failed, will retry in {:?}", RETRY_TIMEOUT);
                         myself.send_after(RETRY_TIMEOUT, || DeliveryWorkerMsg::RunLoop);
                     }
                 }

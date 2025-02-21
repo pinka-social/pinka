@@ -87,40 +87,40 @@ impl Actor for Supervisor {
             ActorStarted(_) => {}
             ActorTerminated(_, _, _) => {}
             ActorFailed(actor_cell, error) => {
-                error!("{error:?}");
+                error!("{error:#}");
                 if actor_cell
                     .is_message_type_of::<ClusterMaintMsg>()
                     .is_some_and(is_true)
                 {
-                    info!("cluster_maint crashed, restarting...");
+                    error!("cluster_maint crashed, restarting...");
                     state.spawn_cluster_maint().await?;
                 }
                 if actor_cell
                     .is_message_type_of::<RaftServerMsg>()
                     .is_some_and(is_true)
                 {
-                    info!("raft server crashed, restarting...");
+                    error!("raft server crashed, restarting...");
                     state.spawn_raft_server().await?;
                 }
                 if actor_cell
                     .is_message_type_of::<StateMachineMsg>()
                     .is_some_and(is_true)
                 {
-                    info!("state machine crashed, restarting...");
+                    error!("state machine crashed, restarting...");
                     state.spawn_state_machine().await?;
                 }
                 if actor_cell
                     .is_message_type_of::<DeliveryWorkerMsg>()
                     .is_some_and(is_true)
                 {
-                    info!("delivery worker crashed, restarting...");
+                    error!("delivery worker crashed, restarting...");
                     state.spawn_delivery_worker().await?;
                 }
                 if actor_cell
                     .is_message_type_of::<FeedSlurpMsg>()
                     .is_some_and(is_true)
                 {
-                    info!("feed slurp worker crashed, restarting...");
+                    error!("feed slurp worker crashed, restarting...");
                     state.spawn_feed_slurp().await?;
                 }
             }

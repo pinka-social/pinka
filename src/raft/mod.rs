@@ -65,8 +65,8 @@ impl Actor for RaftServer {
         state: &mut Self::State,
     ) -> std::result::Result<(), ActorProcessingErr> {
         if let SupervisionEvent::ActorFailed(_, error) = message {
-            error!("{:?}", error);
-            info!("raft worker crashed, restarting...");
+            error!("{error:#}");
+            error!("raft worker crashed, restarting...");
             Actor::spawn_linked(
                 Some(state.server.name.clone()),
                 RaftWorker,
