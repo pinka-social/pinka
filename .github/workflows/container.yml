@@ -16,7 +16,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
+      - name: Install Buildah and Podman
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -qq -y buildah podman
       - name: Buildah Action
         id: buildah
         uses: redhat-actions/buildah-build@v2
