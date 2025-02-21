@@ -24,7 +24,7 @@ jobs:
         id: buildah
         uses: redhat-actions/buildah-build@v2
         with:
-          image: quay.io/pinka/pinka
+          image: pinka
           tags: ${{ github.sha }}
           containerfiles: |
             ./Containerfile
