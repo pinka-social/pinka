@@ -29,7 +29,7 @@ jobs:
           containerfiles: |
             ./Containerfile
       - name: Push to Quay.io
-        uses: redhat-actions/push-to-registry@v1
+        uses: redhat-actions/push-to-registry@v2
         with:
           image: ${{ steps.buildah.outputs.image }}
           tags: ${{ steps.buildah.outputs.tags }}
