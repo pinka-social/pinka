@@ -1,0 +1,35 @@
+name: Build and Push Container
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Buildah Action
+        id: buildah
+        uses: redhat-actions/buildah-build@v2
+        with:
+          image: quay.io/pinka/pinka
+          tags: ${{ github.sha }}
+          containerfiles: |
+            ./Containerfile
+      - name: Push to Quay.io
+        uses: redhat-actions/push-to-registry@v1
+        with:
+          image: ${{ steps.buildah.outputs.image }}
+          tags: ${{ steps.buildah.outputs.tags }}
+          registry: quay.io/pinka
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
