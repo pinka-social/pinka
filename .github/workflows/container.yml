@@ -4,14 +4,19 @@ on:
   push:
     branches:
       - main
+      - v*
   workflow_dispatch:
 
 jobs:
-  build:
+  build_container:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm]
+        include:
+          - os: ubuntu-latest
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            arch: arm64
 
     steps:
       - name: Checkout code
@@ -25,7 +30,7 @@ jobs:
         uses: redhat-actions/buildah-build@v2
         with:
           image: pinka
-          tags: ${{ github.sha }}
+          tags: ${{ matrix.arch}}_${{ github.sha }}
           containerfiles: |
             ./Containerfile
       - name: Push to Quay.io
@@ -33,6 +38,29 @@ jobs:
         with:
           image: ${{ steps.buildah.outputs.image }}
           tags: ${{ steps.buildah.outputs.tags }}
+          registry: quay.io/pinka
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+  build_manifest:
+    runs-on: ubuntu-latest
+    needs: build_container
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install Buildah and Podman
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -qq -y buildah podman
+      - name: Create Manifest
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          buildah manifest create quay.io/pinka/pinka:$TAG quay.io/pinka/pinka:amd64_${{ github.sha }} quay.io/pinka/pinka:arm64_${{ github.sha }}
+      - name: Push Manifest to Quay.io
+        uses: redhat-actions/push-to-registry@v2
+        with:
+          image: pinka
+          tags: ${{ github.ref_name }}
           registry: quay.io/pinka
           username: ${{ secrets.QUAY_USERNAME }}
           password: ${{ secrets.QUAY_PASSWORD }}
