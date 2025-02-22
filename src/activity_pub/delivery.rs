@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Error, Result, bail};
 use aws_lc_rs::rsa::KeyPair;
+use minicbor::decode::info;
 use minicbor::{Decode, Encode};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
@@ -305,32 +306,39 @@ impl DeliveryWorkerState {
 
         let mut result_set = JoinSet::new();
         while let Some(iri) = next {
+            info!(%iri, "fetching collection");
             let value = self.mailman.fetch(&iri).await?;
             let page = Object::from(value);
             let items = page
                 .get_str_array("items")
                 .or_else(|| page.get_str_array("orderedItems"));
-            if let Some(items) = items {
-                for item in items {
-                    let mailman = self.mailman.clone();
-                    let iri = item.to_string();
-                    result_set.spawn(async move {
-                        if let Ok(value) = mailman.fetch(&iri).await {
-                            let object = Object::from(value);
-                            // skip nested collections
-                            object
-                                .get_endpoint("sharedInbox")
-                                .or_else(|| object.get_str("inbox"))
-                                .map(str::to_string)
-                        } else {
-                            None
-                        }
-                    });
-                }
+            let Some(items) = items else {
+                break;
+            };
+            if items.is_empty() {
+                break;
+            }
+            info!(?items, "found items");
+            for item in items {
+                let mailman = self.mailman.clone();
+                let iri = item.to_string();
+                result_set.spawn(async move {
+                    if let Ok(value) = mailman.fetch(&iri).await {
+                        let object = Object::from(value);
+                        // skip nested collections
+                        object
+                            .get_endpoint("sharedInbox")
+                            .or_else(|| object.get_str("inbox"))
+                            .map(str::to_string)
+                    } else {
+                        None
+                    }
+                });
             }
             next = page.get_str("next").map(str::to_string);
         }
         let result = result_set.join_all().await.into_iter().flatten().collect();
+        info!(?result, "discovered inboxes");
         Ok(result)
     }
 }

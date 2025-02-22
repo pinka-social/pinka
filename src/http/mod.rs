@@ -646,13 +646,13 @@ async fn get_followers(
                 ))
                 .with_ordered_items(items);
             if let Some(id) = next {
-                followers = followers.prev(format!(
+                followers = followers.next(format!(
                     "{}/users/{uid}/followers?before={id}",
                     config.init.activity_pub.base_url
                 ));
             }
             if let Some(id) = prev {
-                followers = followers.next(format!(
+                followers = followers.prev(format!(
                     "{}/users/{uid}/followers?after={id}",
                     config.init.activity_pub.base_url
                 ));
