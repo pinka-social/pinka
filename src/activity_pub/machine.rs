@@ -381,18 +381,19 @@ impl State {
             return Ok(());
         };
         // currently we only care activities mentioning our object
-        // TODO verify context
-        let Some(iri) = object
-            .get_node_iri("inReplyTo")
-            .or_else(|| object.get_node_iri("context"))
-        else {
+        let mut contexts = vec![];
+        for ctx_node in ["context", "conversation", "inReplyTo"] {
+            if let Some(iri) = object.get_node_iri(ctx_node) {
+                if iri.starts_with(self.apub.base_url.as_str()) {
+                    contexts.push(iri.to_string());
+                }
+            }
+        }
+        if contexts.is_empty() {
             return Ok(());
-        };
-        let iri = iri.to_string();
-        let object = object.into_owned();
-        // TODO let create = Create::try_from(object)?;
-        // TODO save the activity and the object
+        }
 
+        let object = object.into_owned();
         let keyspace = self.keyspace.clone();
         let obj_repo = self.obj_repo.clone();
         let ctx_index = self.ctx_index.clone();
@@ -400,7 +401,9 @@ impl State {
         spawn_blocking(move || -> Result<()> {
             let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
             obj_repo.insert(&mut b, obj_key, object)?;
-            ctx_index.insert(&mut b, &iri, obj_key);
+            for iri in contexts {
+                ctx_index.insert(&mut b, &iri, obj_key);
+            }
             b.commit()?;
             Ok(())
         })
