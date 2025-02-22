@@ -112,13 +112,13 @@ impl Object<'_> {
     pub(crate) fn to_value(&self) -> Value {
         self.0.clone().into_owned()
     }
-    pub(crate) fn strip_context(self) -> Self {
+    pub(crate) fn strip_context(self) -> Object<'static> {
         let mut obj = self.0.into_owned();
         let obj_map = obj.as_object_mut().unwrap();
         obj_map.remove("@context");
         Object(Cow::Owned(obj))
     }
-    pub(crate) fn ensure_id(self, iri: impl Into<String>) -> Self {
+    pub(crate) fn ensure_id(self, iri: impl Into<String>) -> Object<'static> {
         let mut obj = self.0.into_owned();
         let obj_map = obj.as_object_mut().unwrap();
         if !obj_map.contains_key("id") {
@@ -126,7 +126,7 @@ impl Object<'_> {
         }
         Object(Cow::Owned(obj))
     }
-    pub(crate) fn augment(self, property: &str, value: Value) -> Self {
+    pub(crate) fn augment(self, property: &str, value: Value) -> Object<'static> {
         let mut obj = self.0.into_owned();
         let obj_map = obj.as_object_mut().unwrap();
         if !obj_map.contains_key(property) {
@@ -134,7 +134,13 @@ impl Object<'_> {
         }
         Object(Cow::Owned(obj))
     }
-    pub(crate) fn augment_node(self, node: &str, property: &str, value: Value) -> Self {
+    pub(crate) fn augment_if(self, cond: bool, property: &str, value: Value) -> Object<'static> {
+        if cond {
+            return self.augment(property, value);
+        }
+        self.into_owned()
+    }
+    pub(crate) fn augment_node(self, node: &str, property: &str, value: Value) -> Object<'static> {
         let mut obj = self.0.into_owned();
         if let Some(Value::Object(map)) = obj.get_mut(node) {
             if !map.contains_key(property) {
@@ -143,7 +149,7 @@ impl Object<'_> {
         }
         Object(Cow::Owned(obj))
     }
-    pub(crate) fn augment_with(self, map: Map<String, Value>) -> Self {
+    pub(crate) fn augment_with(self, map: Map<String, Value>) -> Object<'static> {
         let mut obj = self.0.into_owned();
         let obj_map = obj.as_object_mut().unwrap();
         obj_map.extend(map);
