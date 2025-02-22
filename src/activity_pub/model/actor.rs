@@ -21,16 +21,6 @@ impl Actor<'_> {
 
         // TODO: correctly update @context
         let Value::Object(properties) = json!({
-            "@context": [
-                "https://www.w3.org/ns/activitystreams",
-                "https://w3id.org/security/v1",
-                {
-                    "manuallyApprovesFollowers": "as:manuallyApprovesFollowers",
-                    "toot": "http://joinmastodon.org/ns#",
-                    "discoverable": "toot:discoverable",
-                    "indexable": "toot:indexable"
-                }
-            ],
             "type": "Person",
             "id": format!("{}/users/{}", base_url, id),
             "followers": format!("{}/users/{}/followers", base_url, id),
@@ -82,10 +72,6 @@ mod tests {
         assert_eq!(
             actor,
             Actor(Object::from(&json!({
-                "@context": [
-                    "https://www.w3.org/ns/activitystreams",
-                    "https://w3id.org/security/v1"
-                ],
                 "type": "Person",
                 "id": "https://social.example.com/users/john",
                 "name": "John Smith",

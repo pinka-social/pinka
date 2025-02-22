@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use crate::activity_pub::delivery::DeliveryQueueItem;
 use crate::activity_pub::machine::{ActivityPubCommand, C2sCommand, S2sCommand};
-use crate::activity_pub::model::{Actor, Create, Object, OrderedCollection};
+use crate::activity_pub::model::{Actor, Create, JsonLdContext, Object, OrderedCollection};
 use crate::activity_pub::{
     ContextIndex, CryptoRepo, IriIndex, KeyMaterial, ObjectKey, ObjectRepo, OutboxIndex, UserIndex,
     uuidgen, validate_request,
@@ -116,7 +116,11 @@ async fn get_object_by_id(
         let obj_key = ObjectKey::from_str(&obj_key)
             .context("invalid UUID")
             .map_err(invalid)?;
-        blocking_get_object(&config, obj_key)
+        blocking_get_object(
+            &config,
+            obj_key,
+            &[JsonLdContext::ActivityStreams, JsonLdContext::OStatus],
+        )
     })
     .await
     .context("task failed")
@@ -143,7 +147,11 @@ async fn get_object_by_iri(
         let obj_key = ObjectKey::try_from(obj_key.as_ref())
             .context("invalid UUID")
             .map_err(invalid)?;
-        blocking_get_object(&config, obj_key)
+        blocking_get_object(
+            &config,
+            obj_key,
+            &[JsonLdContext::ActivityStreams, JsonLdContext::OStatus],
+        )
     })
     .await
     .context("task failed")
@@ -153,34 +161,43 @@ async fn get_object_by_iri(
 fn blocking_get_object(
     config: &RuntimeConfig,
     obj_key: ObjectKey,
+    json_ld_context: &[JsonLdContext],
 ) -> Result<ActivityStreamsJson<Value>, StatusCode> {
     let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
     let obj_repo = ObjectRepo::new(config.keyspace.clone()).map_err(ise)?;
     info!(%obj_key, "loading object");
     if let Some(object) = obj_repo.find_one(obj_key).map_err(ise)? {
         if let Some(iri) = object.id() {
+            let context = Value::Array(json_ld_context.iter().map(|ctx| ctx.to_json()).collect());
             let likes = ctx_index.count_likes(iri);
             let shares = ctx_index.count_shares(iri);
             let replies = ctx_index.count_replies(iri);
-            let object = object.augment(
-                "likes",
-                json!({
-                    "id": format!("{}/as/objects/{obj_key}/likes", config.init.activity_pub.base_url),
+            let has_context = object.has_props(&["context"]);
+            let has_conversation = object.has_props(&["conversation"]);
+            let iri = iri.to_string();
+            let object = object
+                .augment("@context", context)
+                .augment(
+                    "likes",
+                    json!({
+                        "id": format!("{}/as/objects/{obj_key}/likes", config.init.activity_pub.base_url),
+                        "type": "Collection",
+                        "totalItems": likes
+                    }),
+                ).augment(
+                    "shares",
+                    json!({
+                        "id": format!("{}/as/objects/{obj_key}/shares", config.init.activity_pub.base_url),
+                        "type": "Collection",
+                        "totalItems": shares
+                    }),
+                ).augment("replies", json!({
+                    "id": format!("{}/as/objects/{obj_key}/replies", config.init.activity_pub.base_url),
                     "type": "Collection",
-                    "totalItems": likes
-                }),
-            ).augment(
-                "shares",
-                json!({
-                    "id": format!("{}/as/objects/{obj_key}/shares", config.init.activity_pub.base_url),
-                    "type": "Collection",
-                    "totalItems": shares
-                }),
-            ).augment("replies", json!({
-                "id": format!("{}/as/objects/{obj_key}/replies", config.init.activity_pub.base_url),
-                "type": "Collection",
-                "totalItems": replies
-            }));
+                    "totalItems": replies
+                }))
+                .augment_if(!has_context, "context", iri.clone().into())
+                .augment_if(!has_conversation, "conversation", iri.into());
             return Ok(ActivityStreamsJson(Json(object.into())));
         }
         return Ok(ActivityStreamsJson(Json(object.into())));
@@ -388,7 +405,12 @@ async fn get_actor(
         let user_index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
         let crypto_repo = CryptoRepo::new(config.keyspace.clone()).map_err(ise)?;
         if let Some(object) = user_index.find_one(&uid).map_err(ise)? {
-            let raw_actor = Actor::from(object);
+            let context = Value::Array(vec![
+                JsonLdContext::ActivityStreams.to_json(),
+                JsonLdContext::SecurityV1.to_json(),
+                JsonLdContext::Toot.to_json(),
+            ]);
+            let raw_actor = Actor::from(object.augment("@context", context));
             // TODO store public key separately?
             let key_material = crypto_repo
                 .find_one(&uid)
@@ -494,28 +516,42 @@ async fn get_outbox(
                     let (obj_key, activity) = it;
                     // FIXME abstraction
                     let object = activity.get_node_object("object").unwrap();
-                    let iri = object.id().expect("stored object should have IRI");
+                    let iri = object.id().unwrap();
+                    let json_ld_context = vec![
+                        JsonLdContext::ActivityStreams,
+                        JsonLdContext::OStatus,
+                    ];
+                    let context = Value::Array(json_ld_context.iter().map(|ctx| ctx.to_json()).collect());
                     let likes = ctx_index.count_likes(iri);
                     let shares = ctx_index.count_shares(iri);
                     let replies = ctx_index.count_replies(iri);
-                    let activity = activity.augment_node("object", "likes",
-                        json!({
-                            "id": format!("{}/as/objects/{obj_key}/likes", config.init.activity_pub.base_url),
+                    let has_context = object.has_props(&["context"]);
+                    let has_conversation = object.has_props(&["conversation"]);
+                    let iri = iri.to_string();
+                    let object = object
+                        .augment("@context", context)
+                        .augment(
+                            "likes",
+                            json!({
+                                "id": format!("{}/as/objects/{obj_key}/likes", config.init.activity_pub.base_url),
+                                "type": "Collection",
+                                "totalItems": likes
+                            }),
+                        ).augment(
+                            "shares",
+                            json!({
+                                "id": format!("{}/as/objects/{obj_key}/shares", config.init.activity_pub.base_url),
+                                "type": "Collection",
+                                "totalItems": shares
+                            }),
+                        ).augment("replies", json!({
+                            "id": format!("{}/as/objects/{obj_key}/replies", config.init.activity_pub.base_url),
                             "type": "Collection",
-                            "totalItems": likes
-                        }),
-                    ).augment_node("object", "shares",
-                        json!({
-                            "id": format!("{}/as/objects/{obj_key}/shares", config.init.activity_pub.base_url),
-                            "type": "Collection",
-                            "totalItems": shares
-                        }),
-                    ).augment_node("object", "replies", json!({
-                        "id": format!("{}/as/objects/{obj_key}/replies", config.init.activity_pub.base_url),
-                        "type": "Collection",
-                        "totalItems": replies
-                    }));
-                    activity
+                            "totalItems": replies
+                        }))
+                        .augment_if(!has_context, "context", iri.clone().into())
+                        .augment_if(!has_conversation, "conversation", iri.into());
+                    activity.augment("object", object.into())
                 })
                 .collect();
             let mut outbox = OrderedCollection::new()
@@ -587,10 +623,12 @@ async fn post_outbox(
         // Add actor info
         let act_key = ObjectKey::new();
         let obj_key = ObjectKey::new();
-        let object = object.ensure_id(format!(
-            "{}/as/objects/{obj_key}",
-            config.init.activity_pub.base_url
-        ));
+        let iri = format!("{}/as/objects/{obj_key}", config.init.activity_pub.base_url);
+        // FIXME only augment context and conversation in representation
+        let object = object
+            .ensure_id(iri.clone())
+            .augment("context", iri.clone().into())
+            .augment("conversation", iri.clone().into());
         let create = Create::try_from(object)
             .map_err(invalid)?
             .ensure_id(format!(
