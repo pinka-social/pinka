@@ -10,9 +10,9 @@
     - [x] Client request forwarding
     - [x] State machine application
     - [x] Non-voting observers (read replicas)
-    - [ ] Cluster changes
-    - [ ] Graceful shutdown
+    - [x] Graceful shutdown
     - [ ] Log compaction
+    - [ ] Cluster changes
 - [ ] Activity Streams data models
     - [ ] JSON-LD lite
         - [ ] Context processing
@@ -24,11 +24,11 @@
         - [ ] Article
         - [ ] Note
         - [x] Generic object
-    - [ ] Activities
+    - [x] Activities
         - [x] Create
-        - [ ] Update
-        - [ ] Like
-        - [ ] Follow
+        - [x] Update
+        - [x] Like
+        - [x] Follow
 - [ ] Command line tool to ingest activities
 - [ ] Policy modules
     - [ ] Follow / unfollow
@@ -72,10 +72,10 @@
         - [ ] Block Activity
         - [x] Undo Activity
         - [x] Delivery
-            - [ ] Cache actor inboxes
-            - [x] Retry
-            - [ ] Forwarding from Inbox
             - [x] Shared Inbox Delivery
+            - [x] Retry
+            - [ ] Cache actor inboxes
+            - [ ] Forwarding from Inbox
 - [x] WebFinger
 - [ ] Webmention
 - [ ] NodeInfo
