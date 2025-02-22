@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use anyhow::{Context, Error, Result, bail};
 use aws_lc_rs::rsa::KeyPair;
-use minicbor::decode::info;
 use minicbor::{Decode, Encode};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
@@ -128,7 +127,8 @@ impl DeliveryWorkerState {
             bail!("Failed to receive delivery, raft client returned error");
         };
         if bytes.is_empty() {
-            bail!("Failed to receive delivery, raft client returned empty response");
+            // No work to do
+            return Ok(RETRY_TIMEOUT);
         }
         let result = ReceiveResult::from_bytes(&bytes)?;
 
@@ -175,9 +175,16 @@ impl DeliveryWorkerState {
             return Ok(RETRY_TIMEOUT);
         };
         // Collect recipients
-        let recipients = match item.retry_recipients {
+        let recipients = match &item.retry_targets {
             Some(recipients) => {
-                info!(%actor_iri, "retrying delivery to recipients");
+                let recipients = recipients
+                    .iter()
+                    .filter_map(|target| match target {
+                        RetryTarget::Recipient(iri) => Some(iri.to_string()),
+                        RetryTarget::Inbox(_) => None,
+                    })
+                    .collect();
+                info!(%actor_iri, ?recipients, "retrying delivery to recipients");
                 recipients
             }
             None => {
@@ -196,9 +203,22 @@ impl DeliveryWorkerState {
                 recipients
             }
         };
-        let mut failed_recipients = vec![];
         // Convert to inbox
-        let mut inboxes = vec![];
+        let mut inboxes = match &item.retry_targets {
+            Some(targets) => {
+                let inboxes = targets
+                    .iter()
+                    .filter_map(|target| match target {
+                        RetryTarget::Inbox(inbox) => Some(inbox.to_string()),
+                        RetryTarget::Recipient(_) => None,
+                    })
+                    .collect();
+                info!(%actor_iri, ?inboxes, "retrying delivery to inboxes");
+                inboxes
+            }
+            None => vec![],
+        };
+        let mut failed_targets = vec![];
         for iri in recipients {
             // 5.6 Skip public addressing
             if iri == "https://www.w3.org/ns/activitystreams#Public"
@@ -211,7 +231,7 @@ impl DeliveryWorkerState {
                 Ok(value) => value,
                 Err(error) => {
                     warn!(%error, "failed to fetch remote object");
-                    failed_recipients.push(iri.to_string());
+                    failed_targets.push(RetryTarget::Recipient(iri.to_string()));
                     continue;
                 }
             };
@@ -221,7 +241,7 @@ impl DeliveryWorkerState {
                     Ok(inboxes) => inboxes,
                     Err(error) => {
                         warn!(%error, "failed to discover inboxes");
-                        failed_recipients.push(iri.to_string());
+                        failed_targets.push(RetryTarget::Recipient(iri.to_string()));
                         continue;
                     }
                 };
@@ -262,7 +282,6 @@ impl DeliveryWorkerState {
                     .map_err(|error| DeliveryError { inbox, error })
             });
         }
-        let mut success = true;
         for result in join_set.join_all().await {
             if let Err(delivery_error) = result {
                 warn!(
@@ -270,17 +289,18 @@ impl DeliveryWorkerState {
                     inbox = delivery_error.inbox,
                     error = delivery_error.error
                 );
-                failed_recipients.push(delivery_error.inbox);
-                success = false;
+                failed_targets.push(RetryTarget::Inbox(delivery_error.inbox))
             }
         }
-        if !success {
+        let mut schedule = IMMEDIATE;
+        if !failed_targets.is_empty() {
+            schedule = RETRY_TIMEOUT;
             let command = ActivityPubCommand::QueueDelivery(
                 uuidgen(),
                 DeliveryQueueItem {
                     uid: item.uid,
                     act_key: item.act_key,
-                    retry_recipients: Some(failed_recipients),
+                    retry_targets: Some(failed_targets),
                 },
             );
             let _ = ractor::call!(
@@ -288,7 +308,6 @@ impl DeliveryWorkerState {
                 RaftClientMsg::ClientRequest,
                 LogEntryValue::from(command)
             )?;
-            return Ok(RETRY_TIMEOUT);
         }
         // Ack
         let command = ActivityPubCommand::AckDelivery(result.key, receipt_handle);
@@ -297,8 +316,7 @@ impl DeliveryWorkerState {
             RaftClientMsg::ClientRequest,
             LogEntryValue::from(command)
         )?;
-
-        Ok(IMMEDIATE)
+        Ok(schedule)
     }
 
     async fn discover_inboxes(&self, object: &Object<'_>) -> Result<Vec<String>> {
@@ -354,7 +372,15 @@ pub(crate) struct DeliveryQueueItem {
     #[n(1)]
     pub(crate) act_key: ObjectKey,
     #[n(2)]
-    pub(crate) retry_recipients: Option<Vec<String>>,
+    pub(crate) retry_targets: Option<Vec<RetryTarget>>,
+}
+
+#[derive(Debug, Encode, Decode)]
+pub(crate) enum RetryTarget {
+    #[n(0)]
+    Recipient(#[n(0)] String),
+    #[n(1)]
+    Inbox(#[n(1)] String),
 }
 
 impl DeliveryQueueItem {

@@ -94,7 +94,7 @@ impl FeedSlurpWorkerState {
                 DeliveryQueueItem {
                     uid: uid.to_string(),
                     act_key,
-                    retry_recipients: None,
+                    retry_targets: None,
                 },
             );
             ractor::call!(

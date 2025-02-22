@@ -494,7 +494,7 @@ async fn post_outbox(
             DeliveryQueueItem {
                 uid,
                 act_key,
-                retry_recipients: None,
+                retry_targets: None,
             },
         );
         ractor::call!(
@@ -580,7 +580,7 @@ async fn post_inbox(
                 DeliveryQueueItem {
                     uid,
                     act_key,
-                    retry_recipients: None,
+                    retry_targets: None,
                 },
             );
             ractor::call!(
