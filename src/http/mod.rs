@@ -489,8 +489,14 @@ async fn post_outbox(
         .map_err(ise)?;
         // XXX: in case of update, the `obj_key` is not used, so this
         // queue_delivery will be unable to find the item for delivery.
-        let command =
-            ActivityPubCommand::QueueDelivery(uuidgen(), DeliveryQueueItem { uid, act_key });
+        let command = ActivityPubCommand::QueueDelivery(
+            uuidgen(),
+            DeliveryQueueItem {
+                uid,
+                act_key,
+                retry_targets: None,
+            },
+        );
         ractor::call!(
             client,
             RaftClientMsg::ClientRequest,
@@ -569,8 +575,14 @@ async fn post_inbox(
             )
             .context("RPC call failed")
             .map_err(ise)?;
-            let command =
-                ActivityPubCommand::QueueDelivery(uuidgen(), DeliveryQueueItem { uid, act_key });
+            let command = ActivityPubCommand::QueueDelivery(
+                uuidgen(),
+                DeliveryQueueItem {
+                    uid,
+                    act_key,
+                    retry_targets: None,
+                },
+            );
             ractor::call!(
                 client,
                 RaftClientMsg::ClientRequest,
@@ -634,13 +646,13 @@ async fn get_followers(
                 ))
                 .with_ordered_items(items);
             if let Some(id) = next {
-                followers = followers.prev(format!(
+                followers = followers.next(format!(
                     "{}/users/{uid}/followers?before={id}",
                     config.init.activity_pub.base_url
                 ));
             }
             if let Some(id) = prev {
-                followers = followers.next(format!(
+                followers = followers.prev(format!(
                     "{}/users/{uid}/followers?after={id}",
                     config.init.activity_pub.base_url
                 ));
