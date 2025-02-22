@@ -89,6 +89,7 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
         )
         .route("/users/{id}/followers", get(get_followers))
         .route("/as/objects/{obj_key}", get(get_object_by_id))
+        .route("/as/objects/{obj_key}/replies", get(get_object_replies))
         .route("/as/objects/{obj_key}/{prop}", get(get_object_likes_shares))
         .route(
             "/as/admin/ingest_feed",
@@ -207,6 +208,121 @@ async fn get_object_likes_shares(
             "type": "Collection",
             "totalItems": count
         }))))
+    })
+    .await
+    .context("task failed")
+    .map_err(ise)?
+}
+
+async fn get_object_replies(
+    State(config): State<RuntimeConfig>,
+    Path(obj_key): Path<String>,
+    Query(params): Query<PageParams>,
+) -> Result<ActivityStreamsJson<Value>, StatusCode> {
+    info!(%obj_key, "handle get object replies request");
+    spawn_blocking(move || {
+        let obj_key = ObjectKey::from_str(&obj_key)
+        .context("invalid UUID")
+        .map_err(invalid)?;
+    let iri = format!("{}/as/objects/{obj_key}", config.init.activity_pub.base_url);
+    let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
+        if params.has_page() {
+            let query = params.to_query();
+            let PageParams { before, after, .. } = params;
+            let first = params
+                .first
+                .or_else(|| after.as_ref().map(|_| 10))
+                .map(|first| first.clamp(0, 50));
+            let last = params
+                .last
+                .or_else(|| before.as_ref().map(|_| 10))
+                .map(|last| last.clamp(0, 50));
+            let items: Vec<(ObjectKey, Object)> = ctx_index
+                .find_replies(&iri, before, after, first, last)
+                .map_err(invalid)?;
+            let (next, prev) = if !items.is_empty() {
+                (Some(items[0].0), Some(items.last().unwrap().0))
+            } else {
+                (None, None)
+            };
+            let items = items
+                .into_iter()
+                // NB: replies collection is displayed in reverse chronological order
+                .rev()
+                .map(|it| {
+                    let (obj_key, object) = it;
+                    // FIXME abstraction
+                    let iri = object.id().expect("stored object should have IRI");
+                    let likes = ctx_index.count_likes(iri);
+                    let shares = ctx_index.count_shares(iri);
+                    let object = object.augment("likes",
+                        json!({
+                            "id": format!("{}/as/objects/{obj_key}/likes", config.init.activity_pub.base_url),
+                            "type": "Collection",
+                            "totalItems": likes
+                        }),
+                    ).augment("shares",
+                        json!({
+                            "id": format!("{}/as/objects/{obj_key}/shares", config.init.activity_pub.base_url),
+                            "type": "Collection",
+                            "totalItems": shares
+                        }),
+                    );
+                    object
+                })
+                .collect();
+            let mut replies = OrderedCollection::new()
+                .id(format!(
+                    "{}/as/objects/{obj_key}/replies?{query}",
+                    config.init.activity_pub.base_url,
+                ))
+                .part_of(format!(
+                    "{}/as/objects/{obj_key}/replies",
+                    config.init.activity_pub.base_url
+                ))
+                .last(format!(
+                    "{}/as/objects/{obj_key}/replies?after={}",
+                    config.init.activity_pub.base_url,
+                    Uuid::nil().simple()
+                ))
+                .first(format!(
+                    "{}/as/objects/{obj_key}/replies?before={}",
+                    config.init.activity_pub.base_url,
+                    Uuid::max().simple()
+                ))
+                .with_ordered_items(items);
+            if let Some(id) = next {
+                replies = replies.next(format!(
+                    "{}/as/objects/{obj_key}/replies?before={id}",
+                    config.init.activity_pub.base_url
+                ));
+            }
+            if let Some(id) = prev {
+                replies = replies.prev(format!(
+                    "{}/as/objects/{obj_key}/replies?after={id}",
+                    config.init.activity_pub.base_url
+                ));
+            }
+            Ok(ActivityStreamsJson(Json(replies.into_page().into())))
+        } else {
+            let replies = OrderedCollection::new()
+                .id(format!(
+                    "{}/as/objects/{obj_key}/replies",
+                    config.init.activity_pub.base_url
+                ))
+                .last(format!(
+                    "{}/as/objects/{obj_key}/replies?after={}",
+                    config.init.activity_pub.base_url,
+                    Uuid::nil().simple()
+                ))
+                .first(format!(
+                    "{}/as/objects/{obj_key}/replies?before={}",
+                    config.init.activity_pub.base_url,
+                    Uuid::max().simple()
+                ))
+                .total_items(ctx_index.count_replies(&iri));
+            Ok(ActivityStreamsJson(Json(replies.into())))
+        }
     })
     .await
     .context("task failed")
@@ -382,7 +498,7 @@ async fn get_outbox(
                             "type": "Collection",
                             "totalItems": likes
                         }),
-                    ).augment_node("object", "shares", 
+                    ).augment_node("object", "shares",
                         json!({
                             "id": format!("{}/as/objects/{obj_key}/shares", config.init.activity_pub.base_url),
                             "type": "Collection",
