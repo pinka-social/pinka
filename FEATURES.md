@@ -45,6 +45,7 @@
         - [ ] Liked
         - [x] Likes
         - [x] Shares
+        - [x] Replies
     - [ ] Client to Server Interactions
         - [x] Create Activity
         - [ ] Update Activity
@@ -80,6 +81,7 @@
 - [ ] Webmention
 - [ ] NodeInfo
 - [ ] RESTful endpoints for webui
+    - [ ] Conversations
 - [ ] Security
     - [x] HTTP Signature cavage-12 (HS2019)
         - [x] Sign
