@@ -161,6 +161,7 @@ fn blocking_get_object(
         if let Some(iri) = object.id() {
             let likes = ctx_index.count_likes(iri);
             let shares = ctx_index.count_shares(iri);
+            let replies = ctx_index.count_replies(iri);
             let object = object.augment(
                 "likes",
                 json!({
@@ -175,7 +176,11 @@ fn blocking_get_object(
                     "type": "Collection",
                     "totalItems": shares
                 }),
-            );
+            ).augment("replies", json!({
+                "id": format!("{}/as/objects/{obj_key}/replies", config.init.activity_pub.base_url),
+                "type": "Collection",
+                "totalItems": replies
+            }));
             return Ok(ActivityStreamsJson(Json(object.into())));
         }
         return Ok(ActivityStreamsJson(Json(object.into())));
@@ -492,6 +497,7 @@ async fn get_outbox(
                     let iri = object.id().expect("stored object should have IRI");
                     let likes = ctx_index.count_likes(iri);
                     let shares = ctx_index.count_shares(iri);
+                    let replies = ctx_index.count_replies(iri);
                     let activity = activity.augment_node("object", "likes",
                         json!({
                             "id": format!("{}/as/objects/{obj_key}/likes", config.init.activity_pub.base_url),
@@ -504,7 +510,11 @@ async fn get_outbox(
                             "type": "Collection",
                             "totalItems": shares
                         }),
-                    );
+                    ).augment_node("object", "replies", json!({
+                        "id": format!("{}/as/objects/{obj_key}/replies", config.init.activity_pub.base_url),
+                        "type": "Collection",
+                        "totalItems": replies
+                    }));
                     activity
                 })
                 .collect();
