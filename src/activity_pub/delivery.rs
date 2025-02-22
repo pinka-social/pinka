@@ -323,23 +323,27 @@ impl DeliveryWorkerState {
                 let mailman = self.mailman.clone();
                 let iri = item.to_string();
                 result_set.spawn(async move {
-                    if let Ok(value) = mailman.fetch(&iri).await {
-                        let object = Object::from(value);
-                        // skip nested collections
-                        object
-                            .get_endpoint("sharedInbox")
-                            .or_else(|| object.get_str("inbox"))
-                            .map(str::to_string)
-                    } else {
-                        None
-                    }
+                    let value = mailman.fetch(&iri).await?;
+                    let object = Object::from(value);
+                    // skip nested collections
+                    Ok(object
+                        .get_endpoint("sharedInbox")
+                        .or_else(|| object.get_str("inbox"))
+                        .map(str::to_string))
                 });
             }
             next = page.get_str("next").map(str::to_string);
         }
-        let result = result_set.join_all().await.into_iter().flatten().collect();
-        info!(?result, "discovered inboxes");
-        Ok(result)
+        let mut inboxes = Vec::new();
+        for res in result_set.join_all().await {
+            match res {
+                Ok(Some(inbox)) => inboxes.push(inbox),
+                Ok(None) => continue,
+                Err(err) => return Err(err),
+            }
+        }
+        info!(?inboxes, "discovered inboxes");
+        Ok(inboxes)
     }
 }
 
