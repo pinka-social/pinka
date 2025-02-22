@@ -376,6 +376,10 @@ impl State {
         let S2sCommand {
             obj_key, object, ..
         } = cmd;
+        let Some(object) = object.get_node_object("object") else {
+            warn!("c2s activity should have an object but it does not");
+            return Ok(());
+        };
         // currently we only care activities mentioning our object
         // TODO verify context
         let Some(iri) = object
@@ -385,6 +389,7 @@ impl State {
             return Ok(());
         };
         let iri = iri.to_string();
+        let object = object.into_owned();
         // TODO let create = Create::try_from(object)?;
         // TODO save the activity and the object
 
