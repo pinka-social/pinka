@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - staging
       - v*
   workflow_dispatch:
 
