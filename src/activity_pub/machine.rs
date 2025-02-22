@@ -376,29 +376,35 @@ impl State {
         let S2sCommand {
             obj_key, object, ..
         } = cmd;
-        if object.has_props(&["context"]) {
-            // currently we only care activities mentioning our object
-            // TODO verify context
-            let Some(iri) = object.get_str("context") else {
-                return Ok(());
-            };
-            let iri = iri.to_string();
-            // TODO let create = Create::try_from(object)?;
-            // TODO save the activity and the object
+        let Some(object) = object.get_node_object("object") else {
+            warn!("c2s activity should have an object but it does not");
+            return Ok(());
+        };
+        // currently we only care activities mentioning our object
+        // TODO verify context
+        let Some(iri) = object
+            .get_node_iri("inReplyTo")
+            .or_else(|| object.get_node_iri("context"))
+        else {
+            return Ok(());
+        };
+        let iri = iri.to_string();
+        let object = object.into_owned();
+        // TODO let create = Create::try_from(object)?;
+        // TODO save the activity and the object
 
-            let keyspace = self.keyspace.clone();
-            let obj_repo = self.obj_repo.clone();
-            let ctx_index = self.ctx_index.clone();
+        let keyspace = self.keyspace.clone();
+        let obj_repo = self.obj_repo.clone();
+        let ctx_index = self.ctx_index.clone();
 
-            spawn_blocking(move || -> Result<()> {
-                let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
-                obj_repo.insert(&mut b, obj_key, object)?;
-                ctx_index.insert(&mut b, &iri, obj_key);
-                b.commit()?;
-                Ok(())
-            })
-            .await??;
-        }
+        spawn_blocking(move || -> Result<()> {
+            let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
+            obj_repo.insert(&mut b, obj_key, object)?;
+            ctx_index.insert(&mut b, &iri, obj_key);
+            b.commit()?;
+            Ok(())
+        })
+        .await??;
         Ok(())
     }
     async fn handle_s2s_delete(&mut self, cmd: S2sCommand) -> Result<()> {
