@@ -489,8 +489,14 @@ async fn post_outbox(
         .map_err(ise)?;
         // XXX: in case of update, the `obj_key` is not used, so this
         // queue_delivery will be unable to find the item for delivery.
-        let command =
-            ActivityPubCommand::QueueDelivery(uuidgen(), DeliveryQueueItem { uid, act_key });
+        let command = ActivityPubCommand::QueueDelivery(
+            uuidgen(),
+            DeliveryQueueItem {
+                uid,
+                act_key,
+                retry_recipients: None,
+            },
+        );
         ractor::call!(
             client,
             RaftClientMsg::ClientRequest,
@@ -569,8 +575,14 @@ async fn post_inbox(
             )
             .context("RPC call failed")
             .map_err(ise)?;
-            let command =
-                ActivityPubCommand::QueueDelivery(uuidgen(), DeliveryQueueItem { uid, act_key });
+            let command = ActivityPubCommand::QueueDelivery(
+                uuidgen(),
+                DeliveryQueueItem {
+                    uid,
+                    act_key,
+                    retry_recipients: None,
+                },
+            );
             ractor::call!(
                 client,
                 RaftClientMsg::ClientRequest,

@@ -73,7 +73,7 @@
         - [x] Undo Activity
         - [x] Delivery
             - [ ] Cache actor inboxes
-            - [ ] Retry
+            - [x] Retry
             - [ ] Forwarding from Inbox
             - [x] Shared Inbox Delivery
 - [x] WebFinger
