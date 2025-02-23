@@ -12,7 +12,7 @@ use tracing::info;
 use crate::ActivityPubConfig;
 use crate::activity_pub::delivery::DeliveryQueueItem;
 use crate::activity_pub::machine::{ActivityPubCommand, C2sCommand};
-use crate::activity_pub::model::Object;
+use crate::activity_pub::model::{Create, Object};
 use crate::activity_pub::{ObjectKey, uuidgen};
 use crate::raft::{LogEntryValue, RaftClientMsg, get_raft_local_client};
 
@@ -99,20 +99,28 @@ impl FeedSlurpWorkerState {
         let jinja = env.template_from_str(template)?;
         for entry in feed.entries.iter().take(last.unwrap_or(usize::MAX)).rev() {
             let object = object_from_feed_entry(&self.apub.base_url, uid, entry, &jinja);
+            let act_key = ObjectKey::new();
+            let obj_key = ObjectKey::new();
+            let iri = format!("{}/as/objects/{obj_key}", &self.apub.base_url);
+            let object = object
+                .ensure_id(iri.clone())
+                .augment("context", iri.clone().into())
+                .augment("conversation", iri.clone().into());
+            let create = Create::try_from(object)?
+                .ensure_id(format!("{}/as/objects/{act_key}", &self.apub.base_url))
+                .with_actor(format!("{}/users/{uid}", &self.apub.base_url));
             if *dry_run {
                 info!(
                     "dry-run ingest entry {}",
-                    serde_json::to_string_pretty(&object.to_value())?
+                    serde_json::to_string_pretty(&create.to_value())?
                 );
                 continue;
             }
-            let act_key = ObjectKey::new();
-            let obj_key = ObjectKey::new();
             let command = ActivityPubCommand::C2sCreate(C2sCommand {
                 uid: uid.to_string(),
                 act_key,
                 obj_key,
-                object,
+                object: create.into(),
             });
             ractor::call!(
                 client,

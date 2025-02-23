@@ -685,7 +685,7 @@ async fn post_outbox(
             uid: uid.clone(),
             act_key,
             obj_key,
-            object: Value::from(create).into(),
+            object: create.into(),
         };
         let command = ActivityPubCommand::C2sCreate(scoped_cmd);
         ractor::call!(

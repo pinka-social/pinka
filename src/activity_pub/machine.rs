@@ -333,7 +333,7 @@ impl State {
                             .get_str("updated")
                             .or_else(|| object.get_str("published"))
                     {
-                        // skip
+                        info!("activity is not newer than the object, skipping");
                         return Ok(());
                     }
                     // FIXME where should we ensure id and actor?

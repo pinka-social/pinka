@@ -55,6 +55,9 @@ impl Create<'_> {
                 .augment_node("object", "attributedTo", value);
         Create(obj)
     }
+    pub(crate) fn to_value(&self) -> Value {
+        self.0.to_value()
+    }
 }
 
 impl<'a> From<Create<'a>> for Object<'a> {
