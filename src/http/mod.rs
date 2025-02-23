@@ -86,6 +86,8 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
         .allow_headers(Any)
         .allow_origin(Any);
     let app = Router::new()
+        .route("/.well-known/nodeinfo", get(get_well_known_nodeinfo))
+        .route("/nodeinfo/2.1", get(get_nodeinfo_2_1))
         .route("/.well-known/webfinger", get(get_webfinger))
         .route("/pinka/comments.js", get(get_comments_js))
         .route("/users/{id}", get(get_actor))
@@ -352,6 +354,45 @@ async fn get_object_replies(
     .await
     .context("task failed")
     .map_err(ise)?
+}
+
+async fn get_well_known_nodeinfo(State(config): State<RuntimeConfig>) -> Json<Value> {
+    info!("handle well-known nodeinfo request");
+    let jrd = json!({
+        "links": [
+            {
+                "rel": "http://nodeinfo.diaspora.software/ns/schema/2.1",
+                "href": format!("{}/nodeinfo/2.1", config.init.activity_pub.base_url)
+            }
+        ]
+    });
+    Json(jrd)
+}
+
+async fn get_nodeinfo_2_1() -> Json<Value> {
+    info!("handle nodeinfo 2.1 request");
+    let nodeinfo = json!({
+        "version": "2.1",
+        "software": {
+            "name": env!("CARGO_PKG_NAME"),
+            "version": env!("CARGO_PKG_VERSION"),
+        },
+        "protocols": [
+            "activitypub"
+        ],
+        "services": {
+            "inbound": ["atom1.0", "rss2.0"],
+            "outbound": ["atom1.0", "rss2.0"]
+        },
+        "openRegistrations": false,
+        "usage": {
+            "users": {
+                // TODO: count users
+                "total": 1,
+            }
+        }
+    });
+    Json(nodeinfo)
 }
 
 #[derive(Deserialize)]
