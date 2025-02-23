@@ -317,11 +317,11 @@ impl State {
         spawn_blocking(move || -> Result<()> {
             let create: Object = create.into();
             if let Some(iri) = create.get_node_iri("object") {
-                if let Some(object) = iri_index
-                    .find_one(iri)?
-                    .and_then(|obj_key| obj_repo.find_one(obj_key).transpose())
-                    .transpose()?
-                {
+                if let Some(obj_key) = iri_index.find_one(iri)? {
+                    info!(%iri, "activity mentions an existing object");
+                    let object = obj_repo
+                        .find_one(obj_key)?
+                        .context("Failed to load existing object")?;
                     let Some(update) = create.get_node_object("object") else {
                         error!("activity should have an object");
                         return Ok(());
@@ -344,6 +344,7 @@ impl State {
                     outbox_index.insert_update(&mut b, uid, act_key, update.into())?;
                     b.commit()?;
                 } else {
+                    info!(%iri, "activity mentions a new object");
                     let mut b = keyspace.batch().durability(Some(PersistMode::SyncAll));
                     outbox_index.insert_create(&mut b, uid, act_key, obj_key, create)?;
                     b.commit()?;
