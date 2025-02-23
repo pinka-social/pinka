@@ -82,6 +82,12 @@
 - [ ] NodeInfo
 - [ ] RESTful endpoints for webui
     - [ ] Conversations
+- [ ] Management webui
+    - [ ] Manage followers
+    - [ ] Moderate comments
+    - [ ] Post microblogs
+    - [ ] Ingest a page
+    - [ ] Manage pages
 - [ ] Security
     - [x] HTTP Signature cavage-12 (HS2019)
         - [x] Sign
