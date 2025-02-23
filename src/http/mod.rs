@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::task::spawn_blocking;
+use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 use uuid::Uuid;
 
@@ -71,6 +72,10 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
         info!(target: "http", "http API server is disabled");
         return Ok(());
     }
+    let cors = CorsLayer::new()
+        .allow_methods(vec![Method::GET])
+        .allow_headers(Any)
+        .allow_origin(Any);
     let app = Router::new()
         .route("/.well-known/webfinger", get(get_webfinger))
         .route("/users/{id}", get(get_actor))
@@ -96,6 +101,7 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
             post(post_ingest_feed).layer(from_fn(admin_basic_auth)),
         )
         .fallback(get_object_by_iri)
+        .layer(cors)
         .layer(Extension(config.init.admin.clone()))
         .with_state(config.clone());
     let listener = TcpListener::bind(format!(
