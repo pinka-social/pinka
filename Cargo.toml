@@ -43,6 +43,7 @@ reqwest = { version = "0.12.12", default-features = false, features = [
     "json",
 ] }
 tower-http = { version = "0.6.2", features = ["cors"] }
+ammonia = "4"
 # http signature
 aws-lc-rs = "1.12.2"
 base64ct = { version = "1.6.0", features = ["alloc"] }

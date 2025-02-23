@@ -30,6 +30,7 @@
         - [x] Like
         - [x] Follow
 - [ ] Command line tool to ingest activities
+    - [ ] Custom template for ingested content
 - [ ] Policy modules
     - [ ] Follow / unfollow
     - [ ] Moderation
@@ -60,7 +61,7 @@
         - [ ] Block Activity
         - [ ] Undo Activity
     - [ ] Server to Server Interactions
-        - [ ] Create Activity
+        - [x] Create Activity
         - [ ] Update Activity
         - [ ] Delete Activity
         - [x] Follow Activity
@@ -80,8 +81,12 @@
 - [x] WebFinger
 - [ ] Webmention
 - [ ] NodeInfo
-- [ ] RESTful endpoints for webui
-    - [ ] Conversations
+- [ ] HTTP rendering
+    - [x] Conversations
+        - [x] Sanatize HTML
+        - [ ] Pagination
+        - [ ] Pre-fetch and cache author details
+    - [ ] Likes / Shares
 - [ ] Management webui
     - [ ] Manage followers
     - [ ] Moderate comments

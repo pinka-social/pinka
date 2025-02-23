@@ -126,6 +126,12 @@ impl Object<'_> {
         }
         Object(Cow::Owned(obj))
     }
+    pub(crate) fn replace(self, property: &str, value: Value) -> Object<'static> {
+        let mut obj = self.0.into_owned();
+        let obj_map = obj.as_object_mut().unwrap();
+        obj_map.insert(property.to_string(), value);
+        Object(Cow::Owned(obj))
+    }
     pub(crate) fn augment(self, property: &str, value: Value) -> Object<'static> {
         let mut obj = self.0.into_owned();
         let obj_map = obj.as_object_mut().unwrap();

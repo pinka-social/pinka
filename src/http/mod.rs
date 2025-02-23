@@ -1,7 +1,9 @@
+mod assets;
 mod auth;
 mod content_type;
 
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
 use aws_lc_rs::encoding::AsDer;
@@ -34,8 +36,15 @@ use crate::config::RuntimeConfig;
 use crate::feed_slurp::FeedSlurpMsg;
 use crate::raft::{LogEntryValue, RaftClientMsg, get_raft_local_client};
 
+use self::assets::get_comments_js;
 use self::auth::admin_basic_auth;
 use self::content_type::ActivityStreamsJson;
+
+static AMMONIA: LazyLock<ammonia::Builder> = LazyLock::new(|| {
+    let mut builder = ammonia::Builder::default();
+    builder.url_relative(ammonia::UrlRelative::Deny);
+    builder
+});
 
 #[derive(Debug, Deserialize)]
 struct PageParams {
@@ -78,6 +87,7 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
         .allow_origin(Any);
     let app = Router::new()
         .route("/.well-known/webfinger", get(get_webfinger))
+        .route("/pinka/comments.js", get(get_comments_js))
         .route("/users/{id}", get(get_actor))
         .route(
             "/users/{id}",
@@ -250,10 +260,10 @@ async fn get_object_replies(
     info!(%obj_key, "handle get object replies request");
     spawn_blocking(move || {
         let obj_key = ObjectKey::from_str(&obj_key)
-        .context("invalid UUID")
-        .map_err(invalid)?;
-    let iri = format!("{}/as/objects/{obj_key}", config.init.activity_pub.base_url);
-    let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
+            .context("invalid UUID")
+            .map_err(invalid)?;
+        let iri = format!("{}/as/objects/{obj_key}", config.init.activity_pub.base_url);
+        let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
         if params.has_page() {
             let query = params.to_query();
             let PageParams { before, after, .. } = params;
@@ -278,25 +288,12 @@ async fn get_object_replies(
                 // NB: replies collection is displayed in reverse chronological order
                 .rev()
                 .map(|it| {
-                    let (obj_key, object) = it;
+                    let (_, object) = it;
                     // FIXME abstraction
-                    let iri = object.id().expect("stored object should have IRI");
-                    let likes = ctx_index.count_likes(iri);
-                    let shares = ctx_index.count_shares(iri);
-                    let object = object.augment("likes",
-                        json!({
-                            "id": format!("{}/as/objects/{obj_key}/likes", config.init.activity_pub.base_url),
-                            "type": "Collection",
-                            "totalItems": likes
-                        }),
-                    ).augment("shares",
-                        json!({
-                            "id": format!("{}/as/objects/{obj_key}/shares", config.init.activity_pub.base_url),
-                            "type": "Collection",
-                            "totalItems": shares
-                        }),
-                    );
-                    object
+                    let content = AMMONIA
+                        .clean(object.get_str("content").unwrap_or_default())
+                        .to_string();
+                    object.replace("content", content.into())
                 })
                 .collect();
             let mut replies = OrderedCollection::new()
