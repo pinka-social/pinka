@@ -194,7 +194,7 @@ fn blocking_get_object(
             let has_conversation = object.has_props(&["conversation"]);
             let iri = iri.to_string();
             let object = object
-                .augment("@context", context)
+                .replace("@context", context)
                 .augment(
                     "likes",
                     json!({
