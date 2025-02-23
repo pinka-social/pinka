@@ -5,7 +5,7 @@ password = "QCYFQS4CZVnPcRw9pNkAxjWvb1O8J2AQ"
 name = "single"
 
 [database]
-path = "devdb"
+path = "/tmp/devdb"
 
 [activity_pub]
 base_url = "http://localhost:8080" # without trailing slash

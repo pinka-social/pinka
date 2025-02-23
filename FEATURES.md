@@ -80,7 +80,7 @@
             - [ ] Forwarding from Inbox
 - [x] WebFinger
 - [ ] Webmention
-- [ ] NodeInfo
+- [x] NodeInfo
 - [ ] HTTP rendering
     - [x] Conversations
         - [x] Sanatize HTML

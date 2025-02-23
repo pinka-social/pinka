@@ -554,9 +554,12 @@ impl RaftState {
     }
 
     fn min_quorum_match_index(&self) -> u64 {
-        let server_count = self.active_server_count();
         if self.match_index.is_empty() {
             return 0;
+        }
+        let server_count = self.active_server_count();
+        if server_count == 1 {
+            return self.last_log_index;
         }
         let mut values = self.match_index.values().collect::<Vec<_>>();
         assert_eq!(server_count, values.len());
