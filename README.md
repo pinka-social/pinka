@@ -31,7 +31,7 @@ Mastodon and other ActivityPub-compatible platforms.
   - Drop-in web components for instant commenting functionality
 
 - 🎨 **Highly Customizable**
-  - Flexible Tera templating system
+  - Flexible MiniJinja templating system
   - Fully customizable via CSS
 
 - 🔒 **Built for Reliability**

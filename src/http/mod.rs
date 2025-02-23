@@ -33,7 +33,7 @@ use crate::activity_pub::{
     uuidgen, validate_request,
 };
 use crate::config::RuntimeConfig;
-use crate::feed_slurp::FeedSlurpMsg;
+use crate::feed_slurp::{FeedSlurpMsg, IngestFeed};
 use crate::raft::{LogEntryValue, RaftClientMsg, get_raft_local_client};
 
 use self::assets::get_comments_js;
@@ -850,13 +850,6 @@ async fn get_followers(
     .map_err(ise)?
 }
 
-#[derive(Deserialize)]
-struct IngestFeed {
-    uid: String,
-    base_url: String,
-    feed_url: String,
-}
-
 async fn post_ingest_feed(Json(ingest_feed): Json<IngestFeed>) -> Result<(), StatusCode> {
     info!(%ingest_feed.uid, %ingest_feed.feed_url, "handle ingest feed request");
     if ingest_feed.base_url.is_empty() || ingest_feed.feed_url.is_empty() {
@@ -865,16 +858,9 @@ async fn post_ingest_feed(Json(ingest_feed): Json<IngestFeed>) -> Result<(), Sta
     let Some(feed_slurp) = ActorRef::where_is("feed_slurp".to_string()) else {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     };
-    ractor::cast!(
-        feed_slurp,
-        FeedSlurpMsg::IngestFeed {
-            uid: ingest_feed.uid,
-            base_url: ingest_feed.base_url,
-            feed_url: ingest_feed.feed_url
-        }
-    )
-    .context("failed to ingest feed")
-    .map_err(ise)?;
+    ractor::cast!(feed_slurp, FeedSlurpMsg::IngestFeed(ingest_feed))
+        .context("failed to ingest feed")
+        .map_err(ise)?;
     Ok(())
 }
 
