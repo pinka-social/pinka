@@ -84,7 +84,7 @@
 - [ ] HTTP rendering
     - [x] Conversations
         - [x] Sanatize HTML
-        - [ ] Pagination
+        - [x] Pagination
         - [ ] Pre-fetch and cache author details
     - [ ] Likes / Shares
 - [ ] Management webui
