@@ -1,5 +1,7 @@
 site_name: Pinka
 site_url: https://pinka.dev
+site_description: Pinka is a distributed social network that is built on top of ActivityPub.
+site_author: Kan-Ru Chen
 repo_name: pinka-social/pinka
 repo_url: https://github.com/pinka-social/pinka
 edit_uri: edit/main/docs/docs/
@@ -27,7 +29,10 @@ plugins:
   - blog:
       archive: false
   - rss:
-      use_git: false
+      use_git: true
+      match_path: "blog/posts/.*"
+      abstract_chars_count: -1
+      pretty_print: true
       comments_path: "#__comments"
 markdown_extensions:
   - admonition
