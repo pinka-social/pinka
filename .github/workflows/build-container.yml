@@ -6,6 +6,8 @@ on:
       - main
       - staging
       - v*
+    paths-ignore:
+      - "docs/**"
   workflow_dispatch:
 
 jobs:

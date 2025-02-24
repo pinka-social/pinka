@@ -1,0 +1,56 @@
+site_name: Pinka
+site_url: https://pinka.dev
+repo_name: pinka-social/pinka
+repo_url: https://github.com/pinka-social/pinka
+copyright: Copyright &copy; 2025 Kan-Ru Chen
+theme:
+  name: material
+  palette:
+    scheme: default
+    primary: indigo
+  custom_dir: overrides
+  features:
+    - content.code.copy
+    - content.code.annotate
+extra:
+  alternate:
+    - name: English
+      link: /
+      lang: en
+plugins:
+  - meta
+  - search
+  - social
+  - blog:
+      archive: false
+  - rss:
+      use_git: false
+      comments_path: "#__comments"
+markdown_extensions:
+  - admonition
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - User guide:
+      - Installation: setup/installation.md
+      - Configuration: setup/configuration.md
+      - Rendering: setup/render_comments_on_page.md
+      - Security: setup/security.md
+      - High availability: setup/high-availability.md
+      - Performance: setup/performance.md
+      - Monitoring: setup/monitoring.md
+      - Backup: setup/backup.md
+  - Developer guide:
+      - Architecture: developer/architecture.md
+      - Raft protocol: developer/raft_handle_client_request.md
+      - Storage design: developer/apub_storage_design.md
+      - URL / IRI mapping: developer/apub_url_iri_mapping.md
+      - Signing key management: developer/apub_key_management.md
+  - Reference:
+      - Configuration: reference/configuration.md
+  - Blog: blog/index.md

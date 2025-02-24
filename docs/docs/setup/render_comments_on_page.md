@@ -51,5 +51,8 @@ For each page, fetch the page URL to get the page object in JSON, then fetch the
 replies collection and render them. This can be scheduled in a CI or cron job to
 periodically update the comments section.
 
-TODO: Verify if pagination can be easily done, otherwise provide a dedicated
-endpoint for static site generators.
+
+!!! TODO
+
+      Verify if pagination can be easily done, otherwise provide a dedicated
+      endpoint for static site generators.

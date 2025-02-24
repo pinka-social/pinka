@@ -1,5 +1,5 @@
-> [!WARNING]
-> not implemented
+!!! WARNING
+    Not implemented
 
 When a module (http or mailman) asks for a user's key pair:
 

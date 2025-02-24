@@ -1,0 +1,35 @@
+name: Build and Push Docs Container
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/**"
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install qemu dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static
+      - name: Build container
+        uses: redhat-actions/buildah-build@v2
+        with:
+          image: pinka-docs
+          tags: latest
+          context: docs
+          platforms: linux/amd64, linux/arm64
+          containerfiles: |
+            ./docs/Containerfile
+      - name: Push to quay.io
+        uses: redhat-actions/push-to-registry@v2
+        with:
+          image: pinka-docs
+          tags: latest
+          registry: quay.io/pinka
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}

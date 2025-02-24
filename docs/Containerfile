@@ -1,0 +1,12 @@
+FROM docker.io/squidfunk/mkdocs-material as builder
+
+RUN pip install mkdocs-material[imaging]
+RUN pip install mkdocs-rss-plugin
+
+COPY . /docs
+WORKDIR /docs
+RUN ["mkdocs", "build"]
+
+FROM ghcr.io/static-web-server/static-web-server:latest
+WORKDIR /
+COPY --from=builder /docs/site /public
