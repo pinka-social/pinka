@@ -147,7 +147,7 @@ impl FeedSlurpWorkerState {
 
 static DEFAULT_TEMPLATE: &str = r#"<p>{{ title.content|to_text }}</p>
 {% if summary %}
-<p>{{ summary|to_text|excerpt(400) }}</p>
+<p>{{ summary.content|to_text|excerpt(400) }}</p>
 {% else %}
 <p>{{ content.body|to_text|excerpt(400) }}</p>
 {% endif %}
