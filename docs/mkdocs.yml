@@ -28,9 +28,14 @@ plugins:
   - social
   - blog:
       archive: false
+      post_url_format: "posts/{slug}"
   - rss:
-      use_git: true
       match_path: "blog/posts/.*"
+      date_from_meta:
+        as_creation: "date"
+        datetime_format: "%Y-%m-%d"
+        default_time: "09:30"
+        default_timezone: "Asia/Tokyo"
       abstract_chars_count: -1
       pretty_print: true
       comments_path: "#__comments"
