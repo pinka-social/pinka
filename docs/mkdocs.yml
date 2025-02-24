@@ -2,6 +2,7 @@ site_name: Pinka
 site_url: https://pinka.dev
 repo_name: pinka-social/pinka
 repo_url: https://github.com/pinka-social/pinka
+edit_uri: edit/main/docs/docs/
 copyright: Copyright &copy; 2025 Kan-Ru Chen
 theme:
   name: material
@@ -12,6 +13,8 @@ theme:
   features:
     - content.code.copy
     - content.code.annotate
+    - content.action.edit
+    - content.action.view
 extra:
   alternate:
     - name: English
