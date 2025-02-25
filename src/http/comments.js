@@ -59,13 +59,16 @@
     };
 
     const enrichAuthorDetails = async function (items) {
-        const headers = {
-            'Accept': 'application/ld+json; profile="https://www.w3.org/ns/activitystreams"'
+        const options = {
+            headers: {
+                'Accept': 'application/ld+json; profile="https://www.w3.org/ns/activitystreams"'
+            },
+            cache: 'no-cache'
         };
         const authorIds = items.map(item => item.attributedTo);
         const uniqueAuthorIds = new Set(authorIds);
         const authorDetailsPromises = Array.from(uniqueAuthorIds).map(async (authorId) => {
-            const authorResponse = await fetch(authorId, { headers });
+            const authorResponse = await fetch(authorId, options);
             return authorResponse.json();
         });
 
@@ -144,10 +147,13 @@
 
         loadMoreButton.onclick = async function () {
             if (repliesPage.next) {
-                const headers = {
-                    'Accept': 'application/ld+json; profile="https://www.w3.org/ns/activitystreams"'
+                const options = {
+                    headers: {
+                        'Accept': 'application/ld+json; profile="https://www.w3.org/ns/activitystreams"'
+                    },
+                    cache: 'no-cache'
                 };
-                const nextPageResponse = await fetch(repliesPage.next, { headers });
+                const nextPageResponse = await fetch(repliesPage.next, options);
                 const nextPage = await nextPageResponse.json();
                 if (nextPage && nextPage.orderedItems) {
                     const enrichedNextPageItems = await enrichAuthorDetails(nextPage.orderedItems);
