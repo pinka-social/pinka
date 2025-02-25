@@ -48,13 +48,13 @@ ammonia = "4"
 # http signature
 aws-lc-rs = "1.12.2"
 base64ct = { version = "1.6.0", features = ["alloc"] }
-const-oid = { version = "0.9.6", features = ["db"] }
+const-oid = { version = "0.10.0", features = ["db"] }
 pem-rfc7468 = { version = "0.7.0", features = ["alloc"] }
 secrecy = { version = "0.10.3", features = ["serde"] }
 sha2 = "0.10.8"
 # feed slurping
 feed-rs = "2.3.1"
-spki = "0.7.3"
+spki = "0.8.0-rc.1"
 minijinja = { version = "2.7.0", default-features = false, features = [
     "builtins",
     "debug",
