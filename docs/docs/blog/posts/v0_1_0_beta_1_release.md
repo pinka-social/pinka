@@ -1,6 +1,6 @@
 ---
 slug: v0_1_0_beta_1_release
-date: 2025-02-24
+date: 2025-02-25
 ---
 
 
@@ -19,14 +19,11 @@ In this beta release, we've focused on enhancing the robustness and reliability 
 
 ## Getting Started
 
-To get started with Pinka, you can use our prebuilt container:
+To get started with Pinka, you can find example config files in the repository:
 
 ```bash
-git clone https://github.com/pinka-social/pinka
-docker run --rm --security-opt label=disable \
-        -v ./pinka/examples:/etc/pinka \
-        quay.io/pinka/pinka \
-        run -c /etc/pinka/config-single.toml
+git clone https://github.com/pinka-social/pinka; cd pinka
+cargo run -- run -c examples/config-single.toml
 ```
 
 For detailed documentation, please visit our [website](https://pinka.dev).
