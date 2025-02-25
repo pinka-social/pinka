@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use aws_lc_rs::encoding::AsDer;
 use aws_lc_rs::rsa::{KeySize, PrivateDecryptingKey};
 use axum::extract::{Path, Query, State};
-use axum::http::{Method, StatusCode, Uri};
+use axum::http::{HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::from_fn;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::task::spawn_blocking;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::set_header::SetResponseHeaderLayer;
 use tracing::info;
 use uuid::Uuid;
 
@@ -115,6 +116,10 @@ pub(crate) async fn serve(config: &RuntimeConfig) -> Result<()> {
         .fallback(get_object_by_iri)
         .layer(cors)
         .layer(Extension(config.init.admin.clone()))
+        .layer(SetResponseHeaderLayer::appending(
+            header::VARY,
+            HeaderValue::from_static("accept"),
+        ))
         .with_state(config.clone());
     let listener = TcpListener::bind(format!(
         "{}:{}",
