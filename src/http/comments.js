@@ -23,6 +23,10 @@
                 border-radius: 5px;
                 margin-right: 10px;
             }
+            .pinka-comments .pinka-comment-author-name-container {
+                display: flex;
+                flex-direction: column;
+            }
             .pinka-comments .pinka-comment-author-name {
                 font-weight: bold;
                 text-decoration: none;
@@ -108,14 +112,24 @@
             avatarImg.src = avatarSrc;
             avatarImg.alt = reply.authorDetails ? reply.authorDetails.name : 'Unknown';
 
+            const authorNameContainer = document.createElement('div');
+            authorNameContainer.className = 'pinka-comment-author-name-container';
+
             const authorNameSpan = document.createElement('a');
             authorNameSpan.className = 'pinka-comment-author-name';
             authorNameSpan.textContent = reply.authorDetails ? reply.authorDetails.name : 'Unknown';
             authorNameSpan.href = reply.authorDetails ? reply.authorDetails.id : '#';
             authorNameSpan.target = '_blank';
 
+            const authorPreferredNameSpan = document.createElement('span');
+            authorPreferredNameSpan.className = 'pinka-comment-author-preferred-name';
+            authorPreferredNameSpan.textContent = reply.authorDetails && reply.authorDetails.preferredUsername ? `@${reply.authorDetails.preferredUsername}` : '';
+
+            authorNameContainer.appendChild(authorNameSpan);
+            authorNameContainer.appendChild(authorPreferredNameSpan);
+
             authorDiv.appendChild(avatarImg);
-            authorDiv.appendChild(authorNameSpan);
+            authorDiv.appendChild(authorNameContainer);
 
             const contentDiv = document.createElement('div');
             contentDiv.className = 'pinka-comment-content';
