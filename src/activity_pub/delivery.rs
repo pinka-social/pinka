@@ -7,7 +7,7 @@ use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
 use secrecy::ExposeSecret;
 use tokio::task::{JoinSet, spawn_blocking};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::RuntimeConfig;
 use crate::activity_pub::uuidgen;
@@ -71,7 +71,6 @@ impl Actor for DeliveryWorker {
         _state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         myself.send_after(RETRY_TIMEOUT, || DeliveryWorkerMsg::RunLoop);
-        myself.send_interval(RETRY_TIMEOUT_LONG, || DeliveryWorkerMsg::RunLoop);
         Ok(())
     }
     async fn handle(
@@ -104,7 +103,6 @@ impl Actor for DeliveryWorker {
 
 const IMMEDIATE: Duration = Duration::ZERO;
 const RETRY_TIMEOUT: Duration = Duration::from_secs(30);
-const RETRY_TIMEOUT_LONG: Duration = Duration::from_secs(60 * 5);
 const MAX_RETRIES: u64 = 10;
 
 impl DeliveryWorkerState {
@@ -113,6 +111,7 @@ impl DeliveryWorkerState {
         // Sleep if our local replicated queue is empty
         let queue = self.queue.clone();
         if spawn_blocking(move || queue.is_empty()).await?? {
+            debug!("queue is empty, sleeping for {RETRY_TIMEOUT:?}");
             return Ok(RETRY_TIMEOUT);
         }
         // Pull new work
@@ -129,6 +128,7 @@ impl DeliveryWorkerState {
         };
         if bytes.is_empty() {
             // No work to do
+            debug!("no work to do, sleeping for {RETRY_TIMEOUT:?}");
             return Ok(RETRY_TIMEOUT);
         }
         let result = ReceiveResult::from_bytes(&bytes)?;
@@ -144,6 +144,7 @@ impl DeliveryWorkerState {
                 RaftClientMsg::ClientRequest,
                 LogEntryValue::from(command)
             )?;
+            debug!("giving up, sleeping for {RETRY_TIMEOUT:?}");
             return Ok(RETRY_TIMEOUT);
         }
 
@@ -173,6 +174,7 @@ impl DeliveryWorkerState {
                 RaftClientMsg::ClientRequest,
                 LogEntryValue::from(command)
             )?;
+            debug!("skipping, sleeping for {RETRY_TIMEOUT:?}");
             return Ok(RETRY_TIMEOUT);
         };
         // Collect recipients
@@ -317,6 +319,7 @@ impl DeliveryWorkerState {
             RaftClientMsg::ClientRequest,
             LogEntryValue::from(command)
         )?;
+        debug!("delivery handled, sleeping for {schedule:?}");
         Ok(schedule)
     }
 
