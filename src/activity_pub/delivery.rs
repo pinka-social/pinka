@@ -111,7 +111,8 @@ impl DeliveryWorkerState {
     /// Returns next scheduled time
     async fn handle_delivery(&mut self) -> Result<Duration> {
         // Sleep if our local replicated queue is empty
-        if self.queue.is_empty()? {
+        let queue = self.queue.clone();
+        if spawn_blocking(move || queue.is_empty()).await?? {
             return Ok(RETRY_TIMEOUT);
         }
         // Pull new work
