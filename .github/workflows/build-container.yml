@@ -24,41 +24,37 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Install Buildah and Podman
+      - name: Install Buildah
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -qq -y buildah podman
+          sudo apt-get install -qq -y buildah
       - name: Buildah Action
-        id: buildah
-        uses: redhat-actions/buildah-build@v2
+        run: |
+          buildah build --tag oci-archive:pinka-${{ matrix.arch }}.ociarchive .
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
         with:
-          image: pinka
-          tags: ${{ matrix.arch}}_${{ github.sha }}
-          containerfiles: |
-            ./Containerfile
-      - name: Push to Quay.io
-        uses: redhat-actions/push-to-registry@v2
-        with:
-          image: ${{ steps.buildah.outputs.image }}
-          tags: ${{ steps.buildah.outputs.tags }}
-          registry: quay.io/pinka
-          username: ${{ secrets.QUAY_USERNAME }}
-          password: ${{ secrets.QUAY_PASSWORD }}
+          name: pinka-${{ matrix.arch }}
+          path: pinka-${{ matrix.arch }}.ociarchive
+          retention-days: 1
   build_manifest:
     runs-on: ubuntu-latest
     needs: build_container
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Install Buildah and Podman
+      - name: Install Podman
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -qq -y buildah podman
+          sudo apt-get install -qq -y podman
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: artifact
+          merge-multiple: true
       - name: Create Manifest
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          buildah manifest create quay.io/pinka/pinka:$TAG quay.io/pinka/pinka:amd64_${{ github.sha }} quay.io/pinka/pinka:arm64_${{ github.sha }}
+          podman manifest create quay.io/pinka/pinka:$TAG oci-archive:artifact/pinka-amd64.ociarchive oci-archive:artifact/pinka-arm64.ociarchive
       - name: Push Manifest to Quay.io
         uses: redhat-actions/push-to-registry@v2
         with:
