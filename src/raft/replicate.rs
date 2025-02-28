@@ -226,7 +226,7 @@ impl ReplicateState {
 
             self.next_index = self.match_index + 1;
         } else {
-            self.next_index = self.next_index.saturating_sub(1);
+            self.next_index = self.next_index.saturating_sub(num_entries);
             // TODO optimize for skipping last_log_index
         }
 
