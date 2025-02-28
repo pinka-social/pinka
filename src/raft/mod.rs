@@ -1042,8 +1042,8 @@ impl RaftState {
                     .await?
                 {
                     ractor::cast!(machine, StateMachineMsg::Apply(log_entry))?;
+                    self.last_queued += 1;
                 }
-                self.last_queued = u64::max(self.last_queued, self.commit_index);
             } else {
                 warn!("unable to apply log entries because state_machine is not running");
             }
