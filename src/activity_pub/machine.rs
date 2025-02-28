@@ -79,8 +79,13 @@ impl Actor for ActivityPubMachine {
         match message {
             StateMachineMsg::Apply(log_entry) => match log_entry.value {
                 LogEntryValue::Command(byte_buf) => {
-                    let command = ActivityPubCommand::from_bytes(&byte_buf)?;
-                    let result = state.handle_command(command).await?;
+                    let result = match ActivityPubCommand::from_bytes(&byte_buf) {
+                        Ok(command) => state.handle_command(command).await?,
+                        Err(error) => {
+                            error!("failed to deserialize command: {error:#}");
+                            ClientResult::err()
+                        }
+                    };
                     ractor::cast!(reply, RaftAppliedMsg::Applied(log_entry.index, result))?;
                 }
                 LogEntryValue::NewTermStarted | LogEntryValue::ClusterMessage(_) => {

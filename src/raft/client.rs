@@ -42,6 +42,9 @@ impl ClientResult {
     pub(crate) fn ok() -> ClientResult {
         ClientResult::Ok(vec![])
     }
+    pub(crate) fn err() -> ClientResult {
+        ClientResult::Err(vec![])
+    }
 }
 
 impl From<Vec<u8>> for ClientResult {

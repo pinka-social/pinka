@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::ops::RangeBounds;
 
 use anyhow::{Context, Error, Result};
@@ -17,7 +18,7 @@ pub(crate) struct LogEntry {
     pub(crate) value: LogEntryValue,
 }
 
-#[derive(Debug, Encode, Decode)]
+#[derive(Encode, Decode)]
 pub(crate) enum LogEntryValue {
     /// New leader has been elected
     #[n(0)]
@@ -28,6 +29,16 @@ pub(crate) enum LogEntryValue {
     /// Raw bytes for application payload
     #[n(2)]
     Command(#[cbor(n(0), with = "minicbor::bytes")] Vec<u8>),
+}
+
+impl Debug for LogEntryValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NewTermStarted => write!(f, "NewTermStarted"),
+            Self::ClusterMessage(arg0) => f.debug_tuple("ClusterMessage").field(arg0).finish(),
+            Self::Command(arg0) => write!(f, "Command([u8; {}])", arg0.len()),
+        }
+    }
 }
 
 #[derive(Debug, Encode, Decode)]

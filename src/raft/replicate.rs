@@ -54,6 +54,9 @@ pub(super) struct ReplicateState {
 
     /// Timestamp of last append_entries
     anchor: Instant,
+
+    /// Failed attempts
+    failed_attempts: u64,
 }
 
 pub(super) struct ReplicateArgs {
@@ -97,6 +100,7 @@ impl Actor for ReplicateWorker {
             match_index: 0,
             observer: args.observer,
             anchor: Instant::now(),
+            failed_attempts: 0,
         })
     }
 
@@ -183,14 +187,7 @@ impl ReplicateState {
             ?request,
             "send append_entries"
         );
-        // FIXME when timing out we should either reconnect or kill the worker
-        let call_result = ractor::call_t!(self.peer, RaftMsg::AppendEntries, 1000, request);
-        if let Err(error) = call_result {
-            warn!(%error, "append_entries failed");
-            return Ok(());
-        }
-
-        let response = call_result.unwrap();
+        let response = ractor::call!(self.peer, RaftMsg::AppendEntries, request)?;
         if response.term < current_term {
             warn!(
                 term = response.term,
@@ -214,6 +211,7 @@ impl ReplicateState {
 
         assert_eq!(response.term, current_term);
         if response.success {
+            self.failed_attempts = 0;
             self.match_index = prev_log_index + num_entries;
 
             if !self.observer {
@@ -226,8 +224,18 @@ impl ReplicateState {
 
             self.next_index = self.match_index + 1;
         } else {
-            self.next_index = self.next_index.saturating_sub(1);
-            // TODO optimize for skipping last_log_index
+            let new_next_index = self
+                .next_index
+                .saturating_sub(num_entries.clamp(1, u64::MAX) * 1 << self.failed_attempts);
+            trace!(
+                "append_entries failed {} times, decrement next_index for {} from {} to {}",
+                self.failed_attempts,
+                self.peer.get_name().unwrap(),
+                self.next_index,
+                new_next_index
+            );
+            self.next_index = new_next_index;
+            self.failed_attempts += 1;
         }
 
         Ok(())

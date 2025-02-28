@@ -346,6 +346,7 @@ impl Actor for RaftWorker {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             SupervisionEvent::ActorFailed(_, error) => {
+                error!("{error:#}");
                 error!("replication failed");
                 return Err(error);
             }
@@ -564,16 +565,20 @@ impl RaftState {
         let mut values = self.match_index.values().collect::<Vec<_>>();
         assert_eq!(server_count, values.len());
         values.sort_unstable();
-        // Leader is always in position 0 with value 0 so we can use 1-index
+        values.reverse();
+        trace!(?values, "sorted match_index");
+        // Leader is always in position 0
         // Quorum pos = majority
         //            = (N / 2 + 1)
-        // For example in 5 server cluster we need to look at index 3
-        //         3 = 5 / 2 + 1
-        // For example in 4 server cluster we need to look at index 3
-        //         3 = 4 / 2 + 1
-        // For example in 3 server cluster we need to look at index 2
-        //         2 = 3 / 2 + 1
-        *values[server_count / 2 + 1]
+        // For example in 5 server cluster we need to look at index 2
+        //         2 = 5 / 2
+        // For example in 4 server cluster we need to look at index 2
+        //         2 = 4 / 2
+        // For example in 3 server cluster we need to look at index 1
+        //         1 = 3 / 2
+        // For example in 2 server cluster we need to look at index 1
+        //         1 = 2 / 2
+        *values[server_count / 2]
     }
 
     fn voted_has_quorum(&self) -> bool {
@@ -700,6 +705,7 @@ impl RaftState {
                 }
             }
         }
+        self.match_index.insert(self.peer_id(), self.last_log_index);
         trace!(
             match_index = ?self.match_index,
             commit_index = self.commit_index,
@@ -804,10 +810,16 @@ impl RaftState {
                 && matches!(self.role, RaftRole::Follower)
                 && !log_ok)
         {
+            if self.voted_for.as_ref() == Some(&request.leader_id) {
+                // Reject this request, but still recognize the leader
+                self.recognize_new_leader(&request.leader_id);
+                self.set_election_timer();
+            }
             trace!(
                 server = request.leader_id,
                 term = request.term,
-                "discard stale append_entries request from server {} in term {} (this server's term was {}",
+                log_ok,
+                "discard append_entries request from server {} in term {} (this server's term was {}",
                 request.leader_id,
                 request.term,
                 self.current_term
