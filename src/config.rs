@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -56,14 +57,13 @@ pub(crate) struct ClusterConfig {
     pub(crate) use_mtls: bool,
     pub(crate) pem_dir: Option<PathBuf>,
     pub(crate) ca_certs: Vec<PathBuf>,
-    pub(crate) servers: Vec<ServerConfig>,
+    pub(crate) servers: BTreeMap<String, ServerConfig>,
     pub(crate) reconnect_timeout_ms: u64,
 }
 
 #[derive(Clone, Default, Debug, Deserialize)]
 #[serde(default)]
 pub(crate) struct ServerConfig {
-    pub(crate) name: String,
     pub(crate) hostname: String,
     pub(crate) port: u16,
     pub(crate) readonly_replica: bool,
@@ -109,6 +109,7 @@ pub(crate) struct ActivityPubConfig {
 #[derive(Clone)]
 pub(crate) struct RuntimeConfig {
     pub(crate) init: Config,
+    pub(crate) server_name: String,
     pub(crate) server: ServerConfig,
     pub(crate) keyspace: Keyspace,
 }

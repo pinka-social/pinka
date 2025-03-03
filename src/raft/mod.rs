@@ -49,7 +49,7 @@ impl Actor for RaftServer {
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         Actor::spawn_linked(
-            Some(args.server.name.clone()),
+            Some(args.server_name.clone()),
             RaftWorker,
             args.clone(),
             myself.get_cell(),
@@ -68,7 +68,7 @@ impl Actor for RaftServer {
             error!("{error:#}");
             error!("raft worker crashed, restarting...");
             Actor::spawn_linked(
-                Some(state.server.name.clone()),
+                Some(state.server_name.clone()),
                 RaftWorker,
                 state.clone(),
                 myself.get_cell(),
@@ -1071,12 +1071,7 @@ impl RaftState {
     }
 
     fn server_config_for<'a>(&'a self, name: &str) -> Option<&'a ServerConfig> {
-        self.config
-            .init
-            .cluster
-            .servers
-            .iter()
-            .find(|&s| s.name == name)
+        self.config.init.cluster.servers.get(name)
     }
 
     fn get_leader(&self) -> Option<ActorRef<RaftMsg>> {
@@ -1145,16 +1140,16 @@ impl RaftState {
             .init
             .cluster
             .servers
-            .iter()
+            .values()
             .filter(|s| !s.readonly_replica)
             .count()
     }
 
     fn reset_match_index(&mut self) {
         self.match_index.clear();
-        for server in &self.config.init.cluster.servers {
+        for (server_name, server) in self.config.init.cluster.servers.iter() {
             if !server.readonly_replica {
-                self.match_index.insert(server.name.clone(), 0);
+                self.match_index.insert(server_name.clone(), 0);
             }
         }
     }

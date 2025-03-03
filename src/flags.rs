@@ -7,9 +7,8 @@ xflags::xflags! {
     cmd pinka {
         /// Config file path
         required -c, --config PATH: PathBuf
-        /// Launch the nth server from the config file, default will launch the
-        /// first one in the list.
-        optional -s, --server N: usize
+        /// Launch the server with the specified server NAME.
+        optional -s, --server NAME: String
 
         /// Run the server and start listen for HTTP requests.
         cmd serve run {}
@@ -22,7 +21,7 @@ xflags::xflags! {
 #[derive(Debug)]
 pub struct Pinka {
     pub config: PathBuf,
-    pub server: Option<usize>,
+    pub server: Option<String>,
     pub subcommand: PinkaCmd,
 }
 

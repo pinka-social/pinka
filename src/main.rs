@@ -31,17 +31,30 @@ async fn main() -> Result<()> {
     let config = Config::open(&flags.config)
         .with_context(|| format!("Failed to read config file {}", flags.config.display()))?;
 
-    let server_id = flags.server.unwrap_or_default();
-    if config.cluster.servers.len() <= server_id {
+    if flags.server.is_none() && config.cluster.servers.len() != 1 {
+        eprintln!("Error: Server name is required for config with multiple servers.");
+        exit(1);
+    }
+
+    let server_name = flags.server.unwrap_or_else(|| {
+        config
+            .cluster
+            .servers
+            .first_key_value()
+            .unwrap()
+            .0
+            .to_owned()
+    });
+    if !config.cluster.servers.contains_key(&server_name) {
         eprintln!(
-            "Error: Invalid server index {server_id}, config only defined {} servers.",
+            "Error: Invalid server index {server_name}, config only defined {} servers.",
             config.cluster.servers.len()
         );
         exit(1);
     }
-    let server = config.cluster.servers[server_id].clone();
+    let server = config.cluster.servers[&server_name].clone();
 
-    let keyspace_name = config.database.path.join(&server.name);
+    let keyspace_name = config.database.path.join(&server_name);
     if !keyspace_name.exists() {
         create_keyspace_folder(&keyspace_name).context("Failed to create database folder")?;
     }
@@ -70,6 +83,7 @@ async fn main() -> Result<()> {
 
     let config = RuntimeConfig {
         init: config,
+        server_name,
         server,
         keyspace,
     };

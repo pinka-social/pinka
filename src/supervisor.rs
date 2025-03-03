@@ -155,7 +155,7 @@ impl SupervisorState {
         Actor::spawn_linked(
             Some("cluster_maint".into()),
             ClusterMaint,
-            (self.config.server.clone(), self.config.clone()),
+            self.config.clone(),
             self.myself.get_cell(),
         )
         .await?;

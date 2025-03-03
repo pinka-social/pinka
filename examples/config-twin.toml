@@ -13,8 +13,7 @@ pem_dir = "devcerts"
 ca_certs = ["ca_cert.pem"]
 reconnect_timeout_ms = 10_000
 
-[[cluster.servers]]
-name = "s1"
+[cluster.servers.s1]
 hostname = "localhost"
 port = 8001
 server_cert_chain = ["s1.pem"]
@@ -24,8 +23,7 @@ client_key = "s1.key"
 http.listen = true
 http.port = 7001
 
-[[cluster.servers]]
-name = "s2"
+[cluster.servers.s2]
 hostname = "localhost"
 port = 8002
 server_cert_chain = ["s2.pem"]

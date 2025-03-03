@@ -18,7 +18,7 @@ use tokio_rustls::rustls::{
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tracing::{error, info, warn};
 
-use crate::config::{RuntimeConfig, ServerConfig};
+use crate::config::RuntimeConfig;
 
 pub(super) struct ClusterMaint;
 
@@ -31,7 +31,6 @@ pub(super) enum ClusterMaintMsg {
 
 #[derive(Debug)]
 pub(super) struct ClusterState {
-    server: ServerConfig,
     config: RuntimeConfig,
     server_status: BTreeMap<String, ServerStatus>,
     myself: ActorRef<ClusterMaintMsg>,
@@ -46,25 +45,22 @@ enum ServerStatus {
 impl Actor for ClusterMaint {
     type Msg = ClusterMaintMsg;
     type State = ClusterState;
-    type Arguments = (ServerConfig, RuntimeConfig);
+    type Arguments = RuntimeConfig;
 
     async fn pre_start(
         &self,
         myself: ractor::ActorRef<Self::Msg>,
-        args: Self::Arguments,
+        config: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let (server, config) = args;
-
         let mut server_status = BTreeMap::new();
-        for s in &config.init.cluster.servers {
-            if s.name == server.name {
+        for server_name in config.init.cluster.servers.keys() {
+            if server_name == &config.server_name {
                 continue;
             }
-            server_status.insert(s.name.clone(), ServerStatus::Disconnected);
+            server_status.insert(server_name.clone(), ServerStatus::Disconnected);
         }
 
         Ok(ClusterState {
-            server,
             config,
             server_status,
             myself,
@@ -151,10 +147,10 @@ impl ClusterState {
             IncomingEncryptionMode::Raw
         };
         let node = NodeServer::new(
-            self.server.port,
+            self.config.server.port,
             self.config.init.cluster.auth_cookie.clone(),
-            self.server.name.clone(),
-            self.server.hostname.clone(),
+            self.config.server_name.clone(),
+            self.config.server.hostname.clone(),
             Some(encryption_mode),
             Some(NodeConnectionMode::Isolated),
         );
@@ -173,11 +169,11 @@ impl ClusterState {
             Some(node_server) => node_server,
             None => self.spawn_node_server().await?,
         };
-        for peer in self.config.init.cluster.servers.iter().cloned() {
-            if peer.name == self.server.name {
+        for (peer_name, peer) in self.config.init.cluster.servers.clone().into_iter() {
+            if peer_name == self.config.server_name {
                 continue;
             }
-            if let Some(ServerStatus::Connected) = self.server_status.get(&peer.name) {
+            if let Some(ServerStatus::Connected) = self.server_status.get(&peer_name) {
                 continue;
             }
             let node_server = node_server.clone();
@@ -189,7 +185,7 @@ impl ClusterState {
             ractor::concurrency::spawn(async move {
                 info!(
                     "connecting to {}@{}:{}",
-                    peer.name, peer.hostname, peer.port
+                    peer_name, peer.hostname, peer.port
                 );
                 let conn_result = if let Some(tls_connector) = tls_connector {
                     ractor_cluster::client_connect_enc(
@@ -213,7 +209,7 @@ impl ClusterState {
                     warn!("Error: {}", error);
                     warn!(
                         "unable to connect to {}@{}:{}",
-                        peer.name, peer.hostname, peer.port
+                        peer_name, peer.hostname, peer.port
                     );
                 }
             });
@@ -316,13 +312,19 @@ impl ClusterState {
 
     async fn get_tls_acceptor(&self) -> Result<TlsAcceptor> {
         info!("loading server CA certificates");
-        let roots = self.get_root_store(&self.server.server_ca_certs).await?;
+        let roots = self
+            .get_root_store(&self.config.server.server_ca_certs)
+            .await?;
 
         info!("loading server certificates");
-        let cert_chain = self.get_cert_chain(&self.server.server_cert_chain).await?;
+        let cert_chain = self
+            .get_cert_chain(&self.config.server.server_cert_chain)
+            .await?;
 
         info!("loading server private key");
-        let priv_key = self.get_priv_key(self.server.server_key.as_ref()).await?;
+        let priv_key = self
+            .get_priv_key(self.config.server.server_key.as_ref())
+            .await?;
 
         let client_verifier = WebPkiClientVerifier::builder(roots).build()?;
         Ok(TlsAcceptor::from(Arc::new(
@@ -335,13 +337,19 @@ impl ClusterState {
 
     async fn get_tls_connector(&self) -> Result<TlsConnector> {
         info!("loading client CA certificates");
-        let roots = self.get_root_store(&self.server.client_ca_certs).await?;
+        let roots = self
+            .get_root_store(&self.config.server.client_ca_certs)
+            .await?;
 
         info!("loading client certificates");
-        let cert_chain = self.get_cert_chain(&self.server.client_cert_chain).await?;
+        let cert_chain = self
+            .get_cert_chain(&self.config.server.client_cert_chain)
+            .await?;
 
         info!("loading client private key");
-        let priv_key = self.get_priv_key(self.server.client_key.as_ref()).await?;
+        let priv_key = self
+            .get_priv_key(self.config.server.client_key.as_ref())
+            .await?;
 
         Ok(TlsConnector::from(Arc::new(
             TlsClientConfig::builder()
