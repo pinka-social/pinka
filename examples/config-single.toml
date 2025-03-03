@@ -1,11 +1,7 @@
 [admin]
 password = "QCYFQS4CZVnPcRw9pNkAxjWvb1O8J2AQ"
 
-[cluster.ss.single]
-name = "single"
-
-[[cluster.servers]]
-name = "single"
+[cluster.servers.single]
 
 [database]
 path = "/tmp/devdb"

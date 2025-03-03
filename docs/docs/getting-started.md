@@ -22,9 +22,6 @@ password = "<secure password>"
 
 [database]
 path = "/tmp"
-
-[[cluster.servers]]
-name = "single"
 ```
 
 ## Deployment

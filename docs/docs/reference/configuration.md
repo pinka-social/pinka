@@ -47,8 +47,7 @@ reconnect_timeout_ms = 5000
 
 ## Server Configuration
 ```toml
-[[cluster.servers]]
-name = "server-name"
+[cluster.servers.<server-name>]
 hostname = "server-hostname"
 port = 8080
 readonly_replica = false
