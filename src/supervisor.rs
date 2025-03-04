@@ -12,7 +12,7 @@ use crate::activity_pub::machine::{ActivityPubMachine, ActivityPubMachineInit};
 use crate::cluster::{ClusterMaint, ClusterMaintMsg};
 use crate::config::RuntimeConfig;
 use crate::feed_slurp::{FeedSlurpMsg, FeedSlurpWorker, FeedSlurpWorkerInit};
-use crate::raft::{RaftServer, RaftServerMsg, StateMachineMsg};
+use crate::raft::{RaftConfig, RaftServer, RaftServerMsg, StateMachineMsg};
 
 pub(crate) struct Supervisor;
 
@@ -162,10 +162,45 @@ impl SupervisorState {
         Ok(())
     }
     async fn spawn_raft_server(&self) -> Result<()> {
+        let config = RaftConfig {
+            server_name: self.config.server_name.clone(),
+            heartbeat_ms: self.config.init.raft.heartbeat_ms,
+            min_election_ms: self.config.init.raft.min_election_ms,
+            max_election_ms: self.config.init.raft.max_election_ms,
+            readonly_replica: self.config.server.readonly_replica,
+            servers: self
+                .config
+                .init
+                .cluster
+                .servers
+                .iter()
+                .filter_map(|s| {
+                    if s.1.readonly_replica {
+                        None
+                    } else {
+                        Some(s.0.clone())
+                    }
+                })
+                .collect(),
+            replicas: self
+                .config
+                .init
+                .cluster
+                .servers
+                .iter()
+                .filter_map(|s| {
+                    if s.1.readonly_replica {
+                        Some(s.0.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        };
         Actor::spawn_linked(
             None,
             RaftServer,
-            self.config.clone(),
+            (config, self.config.keyspace.clone()),
             self.myself.get_cell(),
         )
         .await?;

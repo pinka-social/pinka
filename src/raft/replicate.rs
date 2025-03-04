@@ -7,7 +7,7 @@ use ractor_cluster::RactorMessage;
 use tracing::{info, trace, warn};
 
 use super::log_entry::LogEntry;
-use super::{AdvanceCommitIndexMsg, AppendEntriesAsk, RaftLog, RaftMsg, RaftShared, RuntimeConfig};
+use super::{AdvanceCommitIndexMsg, AppendEntriesAsk, RaftConfig, RaftLog, RaftMsg, RaftShared};
 
 pub(super) struct ReplicateWorker;
 
@@ -25,7 +25,7 @@ pub(super) struct ReplicateState {
     parent: ActorRef<RaftMsg>,
 
     /// Global config.
-    config: RuntimeConfig,
+    config: RaftConfig,
 
     /// Per-server raft state
     raft: RaftShared,
@@ -61,7 +61,7 @@ pub(super) struct ReplicateState {
 
 pub(super) struct ReplicateArgs {
     /// Global config.
-    pub(super) config: RuntimeConfig,
+    pub(super) config: RaftConfig,
     /// Per-server raft state
     pub(super) raft: RaftShared,
     /// Parent's name
@@ -129,9 +129,7 @@ impl Actor for ReplicateWorker {
             }
             ReplicateMsg::NotifyStateChange(raft) => {
                 state.raft = raft;
-                if state.anchor.elapsed()
-                    > Duration::from_millis(state.config.init.raft.heartbeat_ms)
-                {
+                if state.anchor.elapsed() > Duration::from_millis(state.config.heartbeat_ms) {
                     // Schedule append_entries to avoid notify_state_change flooding
                     // caused election timeout.
                     state.append_entries().await?;
@@ -153,7 +151,7 @@ impl Deref for ReplicateState {
 impl ReplicateState {
     async fn run_loop(&mut self) -> Result<()> {
         self.append_entries().await?;
-        let next_heartbeat = Duration::from_millis(self.config.init.raft.heartbeat_ms);
+        let next_heartbeat = Duration::from_millis(self.config.heartbeat_ms);
         self.send_after(next_heartbeat, || ReplicateMsg::RunLoop);
         Ok(())
     }

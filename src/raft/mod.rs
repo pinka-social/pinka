@@ -22,7 +22,7 @@ use self::state::RaftSaved;
 pub(crate) use self::state_machine::{RaftAppliedMsg, StateMachineMsg, get_raft_applied};
 
 use anyhow::{Context, Error, Result};
-use fjall::{KvSeparationOptions, PartitionCreateOptions, PartitionHandle, PersistMode};
+use fjall::{Keyspace, KvSeparationOptions, PartitionCreateOptions, PartitionHandle, PersistMode};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent, pg};
 use ractor_cluster::{RactorClusterMessage, RactorMessage};
 use rand::Rng;
@@ -32,16 +32,14 @@ use tokio::task::spawn_blocking;
 use tokio::time::{Instant, sleep};
 use tracing::{debug, error, info, trace, warn};
 
-use crate::config::{RuntimeConfig, ServerConfig};
-
 pub(super) struct RaftServer;
 #[derive(RactorMessage)]
 pub(super) enum RaftServerMsg {}
 
 impl Actor for RaftServer {
     type Msg = RaftServerMsg;
-    type State = RuntimeConfig;
-    type Arguments = RuntimeConfig;
+    type State = (RaftConfig, Keyspace);
+    type Arguments = (RaftConfig, Keyspace);
 
     async fn pre_start(
         &self,
@@ -49,7 +47,7 @@ impl Actor for RaftServer {
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         Actor::spawn_linked(
-            Some(args.server_name.clone()),
+            Some(args.0.server_name.clone()),
             RaftWorker,
             args.clone(),
             myself.get_cell(),
@@ -68,7 +66,7 @@ impl Actor for RaftServer {
             error!("{error:#}");
             error!("raft worker crashed, restarting...");
             Actor::spawn_linked(
-                Some(state.server_name.clone()),
+                Some(state.0.server_name.clone()),
                 RaftWorker,
                 state.clone(),
                 myself.get_cell(),
@@ -117,12 +115,39 @@ struct RaftShared {
     commit_index: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct RaftConfig {
+    /// Name of this server.
+    pub server_name: String,
+
+    /// Heartbeat interval in milliseconds.
+    pub heartbeat_ms: u64,
+
+    /// Minimum election timeout in milliseconds.
+    pub min_election_ms: u64,
+
+    /// Maximum election timeout in milliseconds.
+    pub max_election_ms: u64,
+
+    /// Whether this server is a readonly replica.
+    pub readonly_replica: bool,
+
+    /// Active servers in the cluster.
+    pub servers: Vec<String>,
+
+    /// Replica servers in the cluster.
+    pub replicas: Vec<String>,
+}
+
 struct RaftState {
     /// Actor reference
     myself: ActorRef<RaftMsg>,
 
     /// Cluster config
-    config: RuntimeConfig,
+    config: RaftConfig,
+
+    /// Storage for Raft log and state
+    keyspace: Keyspace,
 
     /// State restore partition
     restore: PartitionHandle,
@@ -209,18 +234,18 @@ impl RaftWorker {
 impl Actor for RaftWorker {
     type Msg = RaftMsg;
     type State = RaftState;
-    type Arguments = RuntimeConfig;
+    type Arguments = (RaftConfig, Keyspace);
 
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let config = args;
+        let (config, keyspace) = args;
 
-        let keyspace = config.keyspace.clone();
+        let ks = keyspace.clone();
         let log = spawn_blocking(move || {
-            keyspace.open_partition(
+            ks.open_partition(
                 "raft_log",
                 PartitionCreateOptions::default()
                     .with_kv_separation(KvSeparationOptions::default()),
@@ -229,14 +254,14 @@ impl Actor for RaftWorker {
         .await?
         .context("Failed to open raft_log")?;
 
-        let keyspace = config.keyspace.clone();
+        let ks = keyspace.clone();
         let restore = spawn_blocking(move || {
-            keyspace.open_partition("raft_restore", PartitionCreateOptions::default())
+            ks.open_partition("raft_restore", PartitionCreateOptions::default())
         })
         .await?
         .context("Failed to open raft_restore state")?;
 
-        let mut state = RaftState::new(myself, config, log, restore);
+        let mut state = RaftState::new(myself, config, keyspace, log, restore);
         state
             .restore_state()
             .await
@@ -277,7 +302,7 @@ impl Actor for RaftWorker {
 
         match message {
             RequestVote(request) => {
-                if state.config.server.readonly_replica {
+                if state.config.readonly_replica {
                     return Ok(());
                 }
                 state
@@ -286,7 +311,7 @@ impl Actor for RaftWorker {
                     .context("Failed to handle RequestVote")?;
             }
             RequestVoteResponse(reply) => {
-                if state.config.server.readonly_replica {
+                if state.config.readonly_replica {
                     return Ok(());
                 }
                 state
@@ -301,7 +326,7 @@ impl Actor for RaftWorker {
                     .context("Failed to handle AppendEntries")?;
             }
             ElectionTimeout => {
-                if state.config.server.readonly_replica {
+                if state.config.readonly_replica {
                     return Ok(());
                 }
                 state
@@ -310,7 +335,7 @@ impl Actor for RaftWorker {
                     .context("Failed to start a new election")?;
             }
             AdvanceCommitIndex(peer_info) => {
-                if state.config.server.readonly_replica {
+                if state.config.readonly_replica {
                     return Ok(());
                 }
                 state
@@ -418,13 +443,15 @@ fn election_timer(myself: ActorRef<RaftMsg>, timeout: Duration) -> Sender<Durati
 impl RaftState {
     fn new(
         myself: ActorRef<RaftMsg>,
-        config: RuntimeConfig,
+        config: RaftConfig,
+        keyspace: Keyspace,
         log: PartitionHandle,
         restore: PartitionHandle,
     ) -> RaftState {
         Self {
             myself,
             config,
+            keyspace,
             restore,
             current_term: 1,
             role: RaftRole::Follower,
@@ -494,11 +521,7 @@ impl RaftState {
             voted_for: self.voted_for.clone(),
             last_applied: self.last_applied,
         };
-        let mut batch = self
-            .config
-            .keyspace
-            .batch()
-            .durability(Some(PersistMode::SyncAll));
+        let mut batch = self.keyspace.batch().durability(Some(PersistMode::SyncAll));
         let restore = self.restore.clone();
         spawn_blocking(move || {
             saved.to_bytes().and_then(|value| {
@@ -530,10 +553,7 @@ impl RaftState {
             return Ok(());
         }
         let server_name = server.get_name().unwrap();
-        let observer = self
-            .server_config_for(&server_name)
-            .with_context(|| format!("Server {server_name} is not defined in config"))?
-            .readonly_replica;
+        let observer = self.config.replicas.contains(&server_name);
 
         info!(peer = server_name, observer, "spawn replication worker");
         let args = ReplicateArgs {
@@ -558,7 +578,10 @@ impl RaftState {
         if self.match_index.is_empty() {
             return 0;
         }
-        let server_count = self.active_server_count();
+        let server_count = {
+            let this = &self;
+            this.config.servers.len()
+        };
         if server_count == 1 {
             return self.last_log_index;
         }
@@ -582,7 +605,10 @@ impl RaftState {
     }
 
     fn voted_has_quorum(&self) -> bool {
-        let server_count = self.active_server_count();
+        let server_count = {
+            let this = &self;
+            this.config.servers.len()
+        };
         if server_count == 1 {
             return true;
         }
@@ -597,9 +623,9 @@ impl RaftState {
     }
 
     fn set_election_timer(&mut self) {
-        let duration = Duration::from_millis(rand::rng().random_range(
-            self.config.init.raft.min_election_ms..=self.config.init.raft.max_election_ms,
-        ));
+        let duration = Duration::from_millis(
+            rand::rng().random_range(self.config.min_election_ms..=self.config.max_election_ms),
+        );
 
         debug_assert!(matches!(
             self.role,
@@ -663,11 +689,7 @@ impl RaftState {
                 error!(remote_actor = ?peer.get_id(), "peer has no name, skipped");
                 continue;
             };
-            let Some(server_config) = self.server_config_for(&peer_name) else {
-                error!(peer = peer_name, "peer has no server config, skipped");
-                continue;
-            };
-            if server_config.readonly_replica {
+            if self.config.replicas.contains(&peer_name) {
                 continue;
             }
 
@@ -855,11 +877,7 @@ impl RaftState {
             && self.log.get_log_entry(index).await?.term != request.entries[0].term
         {
             // conflict: remove 1 entry
-            let batch = self
-                .config
-                .keyspace
-                .batch()
-                .durability(Some(PersistMode::SyncAll));
+            let batch = self.keyspace.batch().durability(Some(PersistMode::SyncAll));
             self.log
                 .remove_last_log_entry(batch, self.last_log_index)
                 .await?;
@@ -1070,10 +1088,6 @@ impl RaftState {
         .context("Failed to apply log entries")
     }
 
-    fn server_config_for<'a>(&'a self, name: &str) -> Option<&'a ServerConfig> {
-        self.config.init.cluster.servers.get(name)
-    }
-
     fn get_leader(&self) -> Option<ActorRef<RaftMsg>> {
         if matches!(self.role, RaftRole::Leader) {
             return Some(self.myself.clone());
@@ -1095,17 +1109,13 @@ impl RaftState {
             term: self.current_term,
             value,
         };
-        let batch = self
-            .config
-            .keyspace
-            .batch()
-            .durability(Some(PersistMode::SyncAll));
+        let batch = self.keyspace.batch().durability(Some(PersistMode::SyncAll));
         self.log.insert(batch, new_log_entry).await?;
         self.last_log_index = index;
         self.last_log_term = self.current_term;
 
         // special case single server mode
-        if self.config.init.cluster.servers.len() == 1 {
+        if self.config.servers.len() == 1 {
             debug!("commit immediately for single server cluster");
             self.advance_commit_index(AdvanceCommitIndexMsg {
                 peer_id: Some(self.peer_id()),
@@ -1124,33 +1134,17 @@ impl RaftState {
         else {
             return Ok(());
         };
-        let batch = self
-            .config
-            .keyspace
-            .batch()
-            .durability(Some(PersistMode::SyncAll));
+        let batch = self.keyspace.batch().durability(Some(PersistMode::SyncAll));
         self.log.insert_all(batch, entries).await?;
         self.last_log_index = last_log_index;
         self.last_log_term = last_log_term;
         Ok(())
     }
 
-    fn active_server_count(&self) -> usize {
-        self.config
-            .init
-            .cluster
-            .servers
-            .values()
-            .filter(|s| !s.readonly_replica)
-            .count()
-    }
-
     fn reset_match_index(&mut self) {
         self.match_index.clear();
-        for (server_name, server) in self.config.init.cluster.servers.iter() {
-            if !server.readonly_replica {
-                self.match_index.insert(server_name.clone(), 0);
-            }
+        for server_name in self.config.servers.iter() {
+            self.match_index.insert(server_name.clone(), 0);
         }
     }
 
