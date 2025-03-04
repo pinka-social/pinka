@@ -1610,9 +1610,9 @@ dependencies = [
  "minicbor",
  "minijinja",
  "pem-rfc7468",
+ "pinka_raft",
  "ractor",
  "ractor_cluster",
- "rand 0.9.0",
  "reqwest",
  "secrecy",
  "serde",
@@ -1629,6 +1629,20 @@ dependencies = [
  "unicode-segmentation",
  "uuid",
  "xflags",
+]
+
+[[package]]
+name = "pinka_raft"
+version = "0.1.0-beta.1"
+dependencies = [
+ "anyhow",
+ "fjall",
+ "minicbor",
+ "ractor",
+ "ractor_cluster",
+ "rand 0.9.0",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

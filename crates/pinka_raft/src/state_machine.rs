@@ -5,12 +5,12 @@ use ractor_cluster::RactorMessage;
 use super::{ClientResult, LogEntry, RaftMsg, RaftWorker};
 
 #[derive(RactorMessage)]
-pub(crate) enum StateMachineMsg {
+pub enum StateMachineMsg {
     Apply(LogEntry),
 }
 
 #[derive(RactorMessage)]
-pub(crate) enum RaftAppliedMsg {
+pub enum RaftAppliedMsg {
     Applied(u64, ClientResult),
 }
 
@@ -31,7 +31,7 @@ impl From<RaftMsg> for RaftAppliedMsg {
     }
 }
 
-pub(crate) fn get_raft_applied() -> Result<DerivedActorRef<RaftAppliedMsg>> {
+pub fn get_raft_applied() -> Result<DerivedActorRef<RaftAppliedMsg>> {
     if let Some(cell) =
         ractor::pg::get_scoped_local_members(&"raft".into(), &RaftWorker::pg_name()).first()
     {

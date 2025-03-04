@@ -2,12 +2,12 @@ use anyhow::{Context, Result};
 use fjall::{Keyspace, PersistMode};
 use minicbor::{Decode, Encode};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
+use raft::{ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg, get_raft_applied};
 use tokio::task::spawn_blocking;
 use tracing::{error, info, warn};
 use uuid::Bytes;
 
 use crate::ActivityPubConfig;
-use crate::raft::{ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg, get_raft_applied};
 
 use super::delivery::DeliveryQueueItem;
 use super::model::{Actor as AsActor, Create, Object, Update};

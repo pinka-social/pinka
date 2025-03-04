@@ -5,13 +5,13 @@ use aws_lc_rs::rsa::KeyPair;
 use minicbor::{Decode, Encode};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
+use raft::{ClientResult, LogEntryValue, RaftClientMsg, get_raft_local_client};
 use secrecy::ExposeSecret;
 use tokio::task::{JoinSet, spawn_blocking};
 use tracing::{debug, info, warn};
 
 use crate::RuntimeConfig;
 use crate::activity_pub::uuidgen;
-use crate::raft::{ClientResult, LogEntryValue, RaftClientMsg, get_raft_local_client};
 
 use super::machine::ActivityPubCommand;
 use super::mailman::Mailman;

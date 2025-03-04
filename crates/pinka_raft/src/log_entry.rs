@@ -9,17 +9,17 @@ use tokio::task::spawn_blocking;
 use super::rpc::RaftSerDe;
 
 #[derive(Debug, Encode, Decode)]
-pub(crate) struct LogEntry {
+pub struct LogEntry {
     #[n(0)]
-    pub(crate) index: u64,
+    pub index: u64,
     #[n(1)]
-    pub(crate) term: u32,
+    pub term: u32,
     #[n(2)]
-    pub(crate) value: LogEntryValue,
+    pub value: LogEntryValue,
 }
 
 #[derive(Encode, Decode)]
-pub(crate) enum LogEntryValue {
+pub enum LogEntryValue {
     /// New leader has been elected
     #[n(0)]
     NewTermStarted,
@@ -39,12 +39,6 @@ impl Debug for LogEntryValue {
             Self::Command(arg0) => write!(f, "Command([u8; {}])", arg0.len()),
         }
     }
-}
-
-#[derive(Debug, Encode, Decode)]
-pub(crate) struct LogEntryList {
-    #[n(0)]
-    pub(crate) items: Vec<LogEntry>,
 }
 
 impl RaftSerDe for LogEntry {}

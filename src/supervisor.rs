@@ -5,6 +5,7 @@ use anyhow::Result;
 use fjall::GarbageCollection;
 use ractor::{Actor, ActorProcessingErr, ActorRef, SupervisionEvent};
 use ractor_cluster::RactorMessage;
+use raft::{RaftConfig, RaftServer, RaftServerMsg, StateMachineMsg};
 use tracing::{error, info};
 
 use crate::activity_pub::delivery::{DeliveryWorker, DeliveryWorkerInit, DeliveryWorkerMsg};
@@ -12,7 +13,6 @@ use crate::activity_pub::machine::{ActivityPubMachine, ActivityPubMachineInit};
 use crate::cluster::{ClusterMaint, ClusterMaintMsg};
 use crate::config::RuntimeConfig;
 use crate::feed_slurp::{FeedSlurpMsg, FeedSlurpWorker, FeedSlurpWorkerInit};
-use crate::raft::{RaftConfig, RaftServer, RaftServerMsg, StateMachineMsg};
 
 pub(crate) struct Supervisor;
 

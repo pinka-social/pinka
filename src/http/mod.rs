@@ -16,6 +16,7 @@ use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use pem_rfc7468::{LineEnding, encode_string as pem_encode};
 use ractor::ActorRef;
+use raft::{LogEntryValue, RaftClientMsg, get_raft_local_client};
 use secrecy::ExposeSecret;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -35,7 +36,6 @@ use crate::activity_pub::{
 };
 use crate::config::RuntimeConfig;
 use crate::feed_slurp::{FeedSlurpMsg, IngestFeed};
-use crate::raft::{LogEntryValue, RaftClientMsg, get_raft_local_client};
 
 use self::assets::get_comments_js;
 use self::auth::admin_basic_auth;

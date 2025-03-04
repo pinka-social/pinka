@@ -7,6 +7,9 @@ version = "0.1.0-beta.1"
 edition = "2024"
 resolver = "3"
 
+[workspace]
+members = ["crates/pinka_raft"]
+
 [dependencies]
 # common utility
 anyhow = "1.0"
@@ -31,8 +34,6 @@ tokio = { version = "1.42", features = [
 ractor = { version = "0.15.1", features = ["cluster"] }
 ractor_cluster = { version = "0.15.1" }
 tokio-rustls = "0.26.1"
-# raft
-rand = "0.9.0"
 # activity pub
 axum = "0.8.1"
 bimap = "0.6.3"
@@ -64,6 +65,8 @@ unicode-segmentation = "1.12.0"
 # config and cli parsing
 toml = "0.8.20"
 xflags = "0.3.2"
+
+raft = { version = "0.1.0-beta.1", path = "crates/pinka_raft", package = "pinka_raft" }
 
 [dev-dependencies]
 tempfile = "3.15.0"

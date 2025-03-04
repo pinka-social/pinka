@@ -5,6 +5,7 @@ use feed_rs::model::Entry;
 use minijinja::{Environment, Template};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
+use raft::{LogEntryValue, RaftClientMsg, get_raft_local_client};
 use serde::Deserialize;
 use serde_json::json;
 use tracing::info;
@@ -14,7 +15,6 @@ use crate::activity_pub::delivery::DeliveryQueueItem;
 use crate::activity_pub::machine::{ActivityPubCommand, C2sCommand};
 use crate::activity_pub::model::{Create, Object};
 use crate::activity_pub::{ObjectKey, uuidgen};
-use crate::raft::{LogEntryValue, RaftClientMsg, get_raft_local_client};
 
 use self::filters::{excerpt, to_text};
 

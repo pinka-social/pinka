@@ -7,7 +7,7 @@ use super::RaftWorker;
 use super::{LogEntryValue, RaftMsg};
 
 #[derive(RactorClusterMessage)]
-pub(crate) enum RaftClientMsg {
+pub enum RaftClientMsg {
     // TODO: add status code
     #[rpc]
     ClientRequest(LogEntryValue, RpcReplyPort<ClientResult>),
@@ -31,7 +31,7 @@ impl From<RaftMsg> for RaftClientMsg {
 }
 
 #[derive(Debug, Encode, Decode)]
-pub(crate) enum ClientResult {
+pub enum ClientResult {
     #[n(0)]
     Ok(#[cbor(n(0), with = "minicbor::bytes")] Vec<u8>),
     #[n(1)]
@@ -39,10 +39,10 @@ pub(crate) enum ClientResult {
 }
 
 impl ClientResult {
-    pub(crate) fn ok() -> ClientResult {
+    pub fn ok() -> ClientResult {
         ClientResult::Ok(vec![])
     }
-    pub(crate) fn err() -> ClientResult {
+    pub fn err() -> ClientResult {
         ClientResult::Err(vec![])
     }
 }
@@ -53,7 +53,7 @@ impl From<Vec<u8>> for ClientResult {
     }
 }
 
-pub(crate) fn get_raft_local_client() -> Result<DerivedActorRef<RaftClientMsg>> {
+pub fn get_raft_local_client() -> Result<DerivedActorRef<RaftClientMsg>> {
     if let Some(cell) =
         ractor::pg::get_scoped_local_members(&"raft".into(), &RaftWorker::pg_name()).first()
     {

@@ -9,9 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 use std::time::Duration;
 
-pub(crate) use self::client::{ClientResult, RaftClientMsg, get_raft_local_client};
+pub use self::client::{ClientResult, RaftClientMsg, get_raft_local_client};
 use self::log_entry::RaftLog;
-pub(crate) use self::log_entry::{LogEntry, LogEntryList, LogEntryValue};
+pub use self::log_entry::{LogEntry, LogEntryValue};
 use self::replicate::{ReplicateArgs, ReplicateMsg, ReplicateWorker};
 use self::rpc::RaftSerDe;
 use self::rpc::{
@@ -19,7 +19,7 @@ use self::rpc::{
     RequestVoteReply,
 };
 use self::state::RaftSaved;
-pub(crate) use self::state_machine::{RaftAppliedMsg, StateMachineMsg, get_raft_applied};
+pub use self::state_machine::{RaftAppliedMsg, StateMachineMsg, get_raft_applied};
 
 use anyhow::{Context, Error, Result};
 use fjall::{Keyspace, KvSeparationOptions, PartitionCreateOptions, PartitionHandle, PersistMode};
@@ -32,9 +32,9 @@ use tokio::task::spawn_blocking;
 use tokio::time::{Instant, sleep};
 use tracing::{debug, error, info, trace, warn};
 
-pub(super) struct RaftServer;
+pub struct RaftServer;
 #[derive(RactorMessage)]
-pub(super) enum RaftServerMsg {}
+pub enum RaftServerMsg {}
 
 impl Actor for RaftServer {
     type Msg = RaftServerMsg;

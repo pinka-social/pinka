@@ -4,7 +4,6 @@ mod config;
 mod feed_slurp;
 mod flags;
 mod http;
-mod raft;
 mod supervisor;
 
 use std::fs::{self, File};

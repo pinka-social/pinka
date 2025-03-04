@@ -3,7 +3,7 @@ use minicbor::{Decode, Encode};
 use ractor::BytesConvertable;
 
 use super::client::ClientResult;
-use super::{LogEntry, LogEntryList, LogEntryValue};
+use super::{LogEntry, LogEntryValue};
 
 pub(super) trait RaftSerDe {
     fn to_bytes(&self) -> Result<Vec<u8>>
@@ -93,7 +93,7 @@ pub(super) struct RequestVoteReply {
     pub(super) vote_from: String,
 }
 
-macro_rules! impl_bytes_convertable_for_serde {
+macro_rules! impl_bytes_convertable_for {
     ($t:ident) => {
         impl RaftSerDe for $t {}
         impl BytesConvertable for $t {
@@ -107,11 +107,10 @@ macro_rules! impl_bytes_convertable_for_serde {
     };
 }
 
-impl_bytes_convertable_for_serde!(AdvanceCommitIndexMsg);
-impl_bytes_convertable_for_serde!(AppendEntriesAsk);
-impl_bytes_convertable_for_serde!(AppendEntriesReply);
-impl_bytes_convertable_for_serde!(RequestVoteAsk);
-impl_bytes_convertable_for_serde!(RequestVoteReply);
-impl_bytes_convertable_for_serde!(LogEntryValue);
-impl_bytes_convertable_for_serde!(LogEntryList);
-impl_bytes_convertable_for_serde!(ClientResult);
+impl_bytes_convertable_for!(AdvanceCommitIndexMsg);
+impl_bytes_convertable_for!(AppendEntriesAsk);
+impl_bytes_convertable_for!(AppendEntriesReply);
+impl_bytes_convertable_for!(RequestVoteAsk);
+impl_bytes_convertable_for!(RequestVoteReply);
+impl_bytes_convertable_for!(LogEntryValue);
+impl_bytes_convertable_for!(ClientResult);
