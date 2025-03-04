@@ -4,7 +4,7 @@ COPY . .
 
 RUN cargo build --release
 
-FROM registry.fedoraproject.org/fedora-minimal
+FROM docker.io/library/debian:stable-slim
 COPY --from=builder /usr/src/pinka/target/release/pinka /usr/local/bin/pinka
 
 EXPOSE 8080

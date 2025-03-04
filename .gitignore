@@ -3,3 +3,5 @@
 /devdb
 .cache/
 /docs/site
+/crates/pinka_raft/examples/jepsen.pinka_raft/store
+/crates/pinka_raft/examples/jepsen.pinka_raft/target
