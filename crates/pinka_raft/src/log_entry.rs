@@ -2,9 +2,9 @@ use std::fmt::Debug;
 use std::ops::RangeBounds;
 
 use anyhow::{Context, Error, Result};
+use blocking::unblock;
 use fjall::{Batch, PartitionHandle};
 use minicbor::{Decode, Encode};
-use tokio::task::spawn_blocking;
 
 use super::rpc::RaftSerDe;
 
@@ -55,19 +55,19 @@ impl RaftLog {
 
     pub(super) async fn insert(&self, mut b: Batch, entry: LogEntry) -> Result<()> {
         let log = self.log.clone();
-        spawn_blocking(move || {
+        unblock(move || {
             let key = entry.index.to_be_bytes();
             let value = entry.to_bytes()?;
             b.insert(&log, key, value);
             b.commit().context("Failed to write log entry")
         })
         .await
-        .context("Failed to insert log entry")?
+        .context("Failed to insert log entry")
     }
 
     pub(super) async fn insert_all(&self, mut b: Batch, entries: Vec<LogEntry>) -> Result<()> {
         let log = self.log.clone();
-        spawn_blocking(move || {
+        unblock(move || {
             for entry in entries {
                 let key = entry.index.to_be_bytes();
                 let value = entry.to_bytes()?;
@@ -76,12 +76,12 @@ impl RaftLog {
             b.commit().context("Failed to write log entries")
         })
         .await
-        .context("Failed to insert log entries")?
+        .context("Failed to insert log entries")
     }
 
     pub(super) async fn get_last_log_entry(&self) -> Result<Option<LogEntry>> {
         let log = self.log.clone();
-        spawn_blocking(move || {
+        unblock(move || {
             log.last_key_value()?
                 .map(|(_, value)| {
                     LogEntry::from_bytes(&value).context("Failed to deserialize log entry")
@@ -89,12 +89,12 @@ impl RaftLog {
                 .transpose()
         })
         .await
-        .context("Failed to get last log entry")?
+        .context("Failed to get last log entry")
     }
 
     pub(super) async fn get_log_entry(&self, index: u64) -> Result<LogEntry> {
         let log = self.log.clone();
-        spawn_blocking(move || {
+        unblock(move || {
             log.get(index.to_be_bytes())
                 .map_err(Error::new)
                 .and_then(|slice| {
@@ -104,7 +104,7 @@ impl RaftLog {
                 })
         })
         .await
-        .context("Failed to get log entry")?
+        .context("Failed to get log entry")
     }
 
     pub(super) async fn log_entry_range(
@@ -116,17 +116,17 @@ impl RaftLog {
             range.start_bound().map(|b| b.to_be_bytes()),
             range.end_bound().map(|b| b.to_be_bytes()),
         );
-        spawn_blocking(move || {
+        unblock(move || {
             log.range(range)
                 .map(|r| {
                     r.map_err(Error::new).and_then(|(_, slice)| {
                         LogEntry::from_bytes(&slice).context("failed to deserialize log entry")
                     })
                 })
-                .collect()
+                .collect::<Result<Vec<LogEntry>>>()
         })
         .await
-        .context("Failed to get log entries")?
+        .context("Failed to get log entries")
     }
 
     pub(super) async fn remove_last_log_entry(
@@ -135,11 +135,11 @@ impl RaftLog {
         last_log_index: u64,
     ) -> Result<()> {
         let log = self.log.clone();
-        spawn_blocking(move || {
+        unblock(move || {
             b.remove(&log, last_log_index.to_be_bytes());
             b.commit().context("Failed to remove last log entry")
         })
         .await
-        .context("Failed to remove last log entry")?
+        .context("Failed to remove last log entry")
     }
 }

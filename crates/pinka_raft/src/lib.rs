@@ -7,7 +7,7 @@ mod state_machine;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub use self::client::{ClientResult, RaftClientMsg, get_raft_local_client};
 use self::log_entry::RaftLog;
@@ -22,14 +22,12 @@ use self::state::RaftSaved;
 pub use self::state_machine::{RaftAppliedMsg, StateMachineMsg, get_raft_applied};
 
 use anyhow::{Context, Error, Result};
+use blocking::unblock;
 use fjall::{Keyspace, KvSeparationOptions, PartitionCreateOptions, PartitionHandle, PersistMode};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent, pg};
 use ractor_cluster::{RactorClusterMessage, RactorMessage};
 use rand::Rng;
-use tokio::select;
-use tokio::sync::mpsc::{Sender, channel};
-use tokio::task::spawn_blocking;
-use tokio::time::{Instant, sleep};
+use tokio::task::AbortHandle;
 use tracing::{debug, error, info, trace, warn};
 
 pub struct RaftServer;
@@ -207,7 +205,10 @@ struct RaftState {
     last_applied: u64,
 
     /// Keeps track of outstanding start election timer.
-    election_timer: Option<Sender<Duration>>,
+    election_timer_handle: Option<AbortHandle>,
+
+    /// Next election time
+    election_time: Option<Instant>,
 
     /// Peers, workaround bug in ractor
     replicate_workers: BTreeMap<PeerId, ActorRef<ReplicateMsg>>,
@@ -244,22 +245,21 @@ impl Actor for RaftWorker {
         let (config, keyspace) = args;
 
         let ks = keyspace.clone();
-        let log = spawn_blocking(move || {
+        let log = unblock(move || {
             ks.open_partition(
                 "raft_log",
                 PartitionCreateOptions::default()
                     .with_kv_separation(KvSeparationOptions::default()),
             )
         })
-        .await?
+        .await
         .context("Failed to open raft_log")?;
 
         let ks = keyspace.clone();
-        let restore = spawn_blocking(move || {
-            ks.open_partition("raft_restore", PartitionCreateOptions::default())
-        })
-        .await?
-        .context("Failed to open raft_restore state")?;
+        let restore =
+            unblock(move || ks.open_partition("raft_restore", PartitionCreateOptions::default()))
+                .await
+                .context("Failed to open raft_restore state")?;
 
         let mut state = RaftState::new(myself, config, keyspace, log, restore);
         state
@@ -309,6 +309,7 @@ impl Actor for RaftWorker {
                     .handle_request_vote(request)
                     .await
                     .context("Failed to handle RequestVote")?;
+                state.set_election_timer();
             }
             RequestVoteResponse(reply) => {
                 if state.config.readonly_replica {
@@ -324,6 +325,7 @@ impl Actor for RaftWorker {
                     .handle_append_entries(request, reply)
                     .await
                     .context("Failed to handle AppendEntries")?;
+                state.set_election_timer();
             }
             ElectionTimeout => {
                 if state.config.readonly_replica {
@@ -333,6 +335,7 @@ impl Actor for RaftWorker {
                     .start_new_election()
                     .await
                     .context("Failed to start a new election")?;
+                state.set_election_timer();
             }
             AdvanceCommitIndex(peer_info) => {
                 if state.config.readonly_replica {
@@ -351,12 +354,18 @@ impl Actor for RaftWorker {
                     .handle_client_request(request, reply)
                     .await
                     .context("Failed to handle ClientRequest")?;
+                if state.leader_id.is_some() {
+                    state.set_election_timer();
+                }
             }
             AppliedLog(last_applied, result) => {
                 state
                     .handle_applied_log(last_applied, result)
                     .await
                     .context("Failed to handle AppliedLog")?;
+                if state.leader_id.is_some() {
+                    state.set_election_timer();
+                }
             }
         }
 
@@ -414,32 +423,6 @@ impl Actor for RaftWorker {
     }
 }
 
-fn election_timer(myself: ActorRef<RaftMsg>, timeout: Duration) -> Sender<Duration> {
-    let (tx, mut rx) = channel(1);
-    let mut sleep = Box::pin(sleep(timeout));
-
-    tokio::spawn(async move {
-        loop {
-            select! {
-                new_timeout = rx.recv() => {
-                    match new_timeout {
-                        Some(timeout) => sleep.as_mut().reset(Instant::now() + timeout),
-                        None => break,
-                    }
-                }
-                _ = &mut sleep => {
-                    if let Err(ref error) = ractor::cast!(myself, RaftMsg::ElectionTimeout) {
-                        warn!(%error, "failed to send election timeout");
-                    }
-                    break;
-                }
-            }
-        }
-    });
-
-    tx
-}
-
 impl RaftState {
     fn new(
         myself: ActorRef<RaftMsg>,
@@ -465,7 +448,8 @@ impl RaftState {
             last_log_index: 0,
             last_queued: 0,
             last_applied: 0,
-            election_timer: None,
+            election_timer_handle: None,
+            election_time: None,
             replicate_workers: BTreeMap::new(),
             pending_responses: BTreeMap::new(),
         }
@@ -478,11 +462,11 @@ impl RaftState {
 
     async fn restore_state(&mut self) -> Result<()> {
         let restore = self.restore.clone();
-        let saved = spawn_blocking(move || match restore.get("raft_saved") {
+        let saved = unblock(move || match restore.get("raft_saved") {
             Ok(Some(value)) => RaftSaved::from_bytes(&value),
             _ => Ok(RaftSaved::default()),
         })
-        .await?
+        .await
         .context("Failed to decode saved raft state")?;
 
         let RaftSaved {
@@ -523,14 +507,14 @@ impl RaftState {
         };
         let mut batch = self.keyspace.batch().durability(Some(PersistMode::SyncAll));
         let restore = self.restore.clone();
-        spawn_blocking(move || {
+        unblock(move || {
             saved.to_bytes().and_then(|value| {
                 batch.insert(&restore, "raft_saved", value);
                 batch.commit()?;
                 Ok(())
             })
         })
-        .await?
+        .await
         .context("Failed to persist raft state")
     }
 
@@ -633,22 +617,28 @@ impl RaftState {
         ));
         debug!("will start election in {:?}", duration);
 
-        match &self.election_timer {
-            Some(timer) if !timer.is_closed() => {
-                let _ = timer.try_send(duration);
-            }
-            _ => {
-                self.election_timer = Some(election_timer(self.myself.clone(), duration));
-            }
-        }
+        self.unset_election_timer();
+
+        self.election_timer_handle = Some(
+            self.send_after(duration, || RaftMsg::ElectionTimeout)
+                .abort_handle(),
+        );
+        self.election_time = Some(Instant::now() + duration);
     }
 
     fn unset_election_timer(&mut self) {
         debug!("unset election timer");
-        self.election_timer = None;
+        if let Some(handle) = self.election_timer_handle.take() {
+            handle.abort();
+        }
+        self.election_timer_handle = None;
+        self.election_time = None;
     }
 
     async fn start_new_election(&mut self) -> Result<()> {
+        if self.election_time.is_none_or(|et| et > Instant::now()) {
+            return Ok(());
+        }
         if matches!(self.role, RaftRole::Leader) {
             warn!("starting a election as a leader");
         }
@@ -811,10 +801,6 @@ impl RaftState {
         trace!(?request, "received append_entries");
         self.update_term(request.term).await?;
 
-        if self.leader_id.is_some() {
-            self.set_election_timer();
-        }
-
         assert!(request.term <= self.current_term);
 
         let log_ok = request.prev_log_index == 0
@@ -835,7 +821,6 @@ impl RaftState {
             if self.voted_for.as_ref() == Some(&request.leader_id) {
                 // Reject this request, but still recognize the leader
                 self.recognize_new_leader(&request.leader_id);
-                self.set_election_timer();
             }
             trace!(
                 server = request.leader_id,
@@ -869,7 +854,6 @@ impl RaftState {
                 warn!(%error, "send response to append_entries failed");
             }
             self.apply_log_entries().await?;
-            self.set_election_timer();
             return Ok(());
         }
         if !request.entries.is_empty()
@@ -886,13 +870,9 @@ impl RaftState {
             if let Err(error) = reply.send(response) {
                 warn!(%error, "send response to append_entries failed");
             }
-            self.set_election_timer();
             return Ok(());
         }
         if !request.entries.is_empty() && self.last_log_index == request.prev_log_index {
-            // Is there a better way to handle timeout? Just use Instant and a
-            // regular interval to check?
-            self.unset_election_timer();
             self.replicate_log_entries(request.entries).await?;
             response.success = true;
 
@@ -901,7 +881,6 @@ impl RaftState {
                 warn!(%error, "send response to append_entries failed");
             }
             self.apply_log_entries().await?;
-            self.set_election_timer();
             return Ok(());
         }
 
@@ -994,9 +973,8 @@ impl RaftState {
         self.persist_state()
             .await
             .context("Failed to update current term")?;
-        self.set_election_timer();
 
-        if was_leader || self.election_timer.is_none() {
+        if was_leader || self.election_time.is_none() {
             info!("stepping down");
         }
 
@@ -1019,7 +997,7 @@ impl RaftState {
         if let Some(leader) = self.get_leader() {
             // DEADLOCK HAZARD: Leader needs our vote to confirm quorum so we
             // should not block our actor thread.
-            tokio::spawn(async move {
+            ractor::concurrency::spawn(async move {
                 // TODO: add timeout?
                 reply
                     .send(
@@ -1038,11 +1016,6 @@ impl RaftState {
 
         self.last_applied = last_applied;
         self.persist_state().await?;
-
-        // Avoid flooded apply message caused election timeout
-        if !matches!(self.role, RaftRole::Leader) {
-            self.set_election_timer();
-        }
 
         info!(
             last_queued = self.last_queued,
