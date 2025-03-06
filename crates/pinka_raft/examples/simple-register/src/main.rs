@@ -1,3 +1,5 @@
+mod cluster;
+
 use std::str::from_utf8;
 
 use anyhow::Result;
@@ -11,14 +13,13 @@ use pinka_raft::{
     StateMachineMsg, get_raft_applied, get_raft_local_client,
 };
 use ractor::{Actor, ActorProcessingErr, ActorRef};
-use ractor_cluster::NodeServer;
-use ractor_cluster::node::NodeConnectionMode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::task::spawn_blocking;
 use tracing::info;
+
+use cluster::{ClusterConfig, ClusterMaint};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -33,7 +34,7 @@ async fn main() -> Result<()> {
     let keyspace = Config::new("keyspace").open()?;
     let raft_config = RaftConfig {
         server_name: flags.name.clone(),
-        heartbeat_ms: 100,
+        heartbeat_ms: 50,
         min_election_ms: 500,
         max_election_ms: 1000,
         readonly_replica: false,
@@ -42,31 +43,15 @@ async fn main() -> Result<()> {
     };
 
     // Start the node server
-    let node = NodeServer::new(
-        8001,
-        "supersecretcookie".to_string(),
-        flags.name.clone(),
-        flags.name.clone(),
-        None,
-        Some(NodeConnectionMode::Isolated),
-    );
-    let (node_server, _) = Actor::spawn(None, node, ()).await?;
-
-    // Connect to peer servers
-    for server in &servers {
-        if server == &flags.name {
-            continue;
-        }
-        loop {
-            if ractor_cluster::client_connect(&node_server, format!("{server}:8001"))
-                .await
-                .is_ok()
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-    }
+    Actor::spawn(
+        Some("cluster_maint".to_string()),
+        ClusterMaint,
+        ClusterConfig {
+            server_name: flags.name.clone(),
+            servers: servers.clone(),
+        },
+    )
+    .await?;
 
     // Start the raft server
     Actor::spawn(
@@ -93,7 +78,7 @@ async fn get_key(Path(key): Path<String>) -> Json<Value> {
     let command = KvCommand::Read(key);
     let log_value =
         LogEntryValue::Command(serde_json::to_vec(&command).expect("unable to serialize"));
-    let result = ractor::call_t!(raft_client, RaftClientMsg::ClientRequest, 1000, log_value)
+    let result = ractor::call_t!(raft_client, RaftClientMsg::ClientRequest, 10000, log_value)
         .expect("failed to get value");
     let value = match result {
         ClientResult::Ok(bytes) => {
@@ -111,7 +96,7 @@ async fn set_key(Json(command): Json<KvCommand>) -> StatusCode {
     let raft_client = get_raft_local_client().expect("no raft server");
     let log_value =
         LogEntryValue::Command(serde_json::to_vec(&command).expect("unable to serialize"));
-    let result = ractor::call_t!(raft_client, RaftClientMsg::ClientRequest, 1000, log_value)
+    let result = ractor::call_t!(raft_client, RaftClientMsg::ClientRequest, 10000, log_value)
         .expect("failed to get value");
     match result {
         ClientResult::Ok(_) => StatusCode::OK,

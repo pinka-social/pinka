@@ -5,6 +5,7 @@
             [clj-http.client :as http]
             [jepsen
              [checker :as checker]
+             [independent :as independent]
              [cli :as cli]
              [client :as client]
              [control :as c]
@@ -19,10 +20,6 @@
             [knossos.model :as model]
             [slingshot.slingshot :refer [try+]])
   (:import [knossos.model Model]))
-
-(defn r   [_ _] {:type :invoke, :f :read, :value nil})
-(defn w   [_ _] {:type :invoke, :f :write, :value (rand-int 5)})
-(defn cas [_ _] {:type :invoke, :f :cas, :value [(rand-int 5) (rand-int 5)]})
 
 (defn servers
   "Return a list of servers"
@@ -62,29 +59,31 @@
     (assoc this :conn node))
   (setup! [this test])
   (invoke! [this test op]
-    (let [v (:value op)
+    (let [[k v] (:value op)
           url (str "http://" (:conn this) ":8080")]
       (case (:f op)
         :read (assoc op :type :ok :value
-                     (:value (http/get (str url "/foo") {:as :json})))
-        :write (do (info "Writing" (generate-string {:type "Write" :value ["foo" v]}))
-                   (assoc op :type :ok :value
-                          (do (http/post url
-                                         {:body (generate-string {:type "Write" :value ["foo" v]})
-                                          :content-type :json
-                                          :as :json})
-                              nil)))
-        :cas (try+ (let [[v v'] (:value op)]
-                     (assoc op :type :ok :value
-                            (do (http/post url
-                                           {:body (generate-string {:type "Cas" :value ["foo" v v']})
-                                            :content-type :json
-                                            :as :json})
-                                nil)))
+                     (independent/tuple k (:value (http/get (str url "/" k) {:as :json}))))
+        :write (do (info "Writing" (generate-string {:type "Write" :value [(str k) v]}))
+                   (http/post url
+                              {:body (generate-string {:type "Write" :value [(str k) v]})
+                               :content-type :json
+                               :as :json})
+                   (assoc op :type :ok))
+        :cas (try+ (let [[old new] v]
+                     (http/post url
+                                {:body (generate-string {:type "Cas" :value [(str k) old new]})
+                                 :content-type :json
+                                 :as :json})
+                     (assoc op :type :ok))
                    (catch [:status 412] e
                      (assoc op :type :fail))))))
   (teardown! [this test])
   (close! [_ test]))
+
+(defn w   [_ _] {:type :invoke, :f :write, :value (rand-int 5)})
+(defn r   [_ _] {:type :invoke, :f :read})
+(defn cas [_ _] {:type :invoke, :f :cas, :value [(rand-int 5) (rand-int 5)]})
 
 (defn pinka-raft-test
   "Run a Jepsen test for Pinka-Raft"
@@ -92,23 +91,32 @@
   (merge  tests/noop-test
           opts
           {:pure-generators true
-           :name   "pinka-raft"
-           :db     (db "0.1.0-beta.1")
-           :os     debian/os
-           :client (Client. nil)
-           :nemesis         (nemesis/partition-random-halves)
-           :checker         (checker/compose
-                             {:linear (checker/linearizable
-                                       {:model     (model/cas-register)
-                                        :algorithm :linear})
-                              :timeline (timeline/html)})
-           :generator (->> (gen/mix [r w cas])
-                           (gen/stagger 1/2)
+           :name    "pinka-raft"
+           :db      (db "0.1.0-beta.1")
+           :os      debian/os
+           :client  (Client. nil)
+           :nemesis (nemesis/partition-random-halves)
+           :checker (checker/compose
+                     {:perf   (checker/perf)
+                      :indep (independent/checker
+                              (checker/compose
+                               {:linear   (checker/linearizable
+                                           {:model (model/cas-register)
+                                            :algorithm :linear})
+                                :timeline (timeline/html)}))})
+           :generator (->> (independent/concurrent-generator
+                            10
+                            (range)
+                            (fn [k]
+                              (->> (gen/mix [r w cas])
+                                   (gen/stagger (/ 10))
+                                   (gen/limit 100))))
                            (gen/nemesis
-                            (cycle [(gen/sleep 5)
-                                    {:type :info, :f :start}
-                                    (gen/sleep 5)
-                                    {:type :info, :f :stop}]))
+                            (->> [(gen/sleep 5)
+                                  {:type :info, :f :start}
+                                  (gen/sleep 5)
+                                  {:type :info, :f :stop}]
+                                 cycle))
                            (gen/time-limit (:time-limit opts)))}))
 
 (defn -main
