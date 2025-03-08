@@ -233,7 +233,7 @@ impl DeliveryWorkerState {
             let value = match self.mailman.fetch(&iri).await {
                 Ok(value) => value,
                 Err(error) => {
-                    warn!(%error, "failed to fetch remote object");
+                    warn!("failed to fetch remote object: {error:#}");
                     failed_targets.push(RetryTarget::Recipient(iri.to_string()));
                     continue;
                 }
@@ -243,7 +243,7 @@ impl DeliveryWorkerState {
                 let new_inboxes = match self.discover_inboxes(&object).await {
                     Ok(inboxes) => inboxes,
                     Err(error) => {
-                        warn!(%error, "failed to discover inboxes");
+                        warn!("failed to discover inboxes: {error:#}");
                         failed_targets.push(RetryTarget::Recipient(iri.to_string()));
                         continue;
                     }
@@ -288,7 +288,7 @@ impl DeliveryWorkerState {
         for result in join_set.join_all().await {
             if let Err(delivery_error) = result {
                 warn!(
-                    "failed to deliver activity to {inbox}: {error}",
+                    "failed to deliver activity to {inbox}: {error:#}",
                     inbox = delivery_error.inbox,
                     error = delivery_error.error
                 );
