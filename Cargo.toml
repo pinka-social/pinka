@@ -39,7 +39,7 @@ axum = "0.8.1"
 bimap = "0.6.3"
 jiff = "0.2.0"
 reqwest = { version = "0.12.12", default-features = false, features = [
-    "rustls-tls-native-roots-no-provider",
+    "rustls-tls-webpki-roots-no-provider",
     "charset",
     "gzip",
     "json",
