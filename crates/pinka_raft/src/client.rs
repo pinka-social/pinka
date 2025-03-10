@@ -39,6 +39,12 @@ pub enum ClientResult {
 }
 
 impl ClientResult {
+    pub fn is_ok(&self) -> bool {
+        matches!(self, ClientResult::Ok(_))
+    }
+    pub fn is_err(&self) -> bool {
+        matches!(self, ClientResult::Err(_))
+    }
     pub fn ok() -> ClientResult {
         ClientResult::Ok(vec![])
     }

@@ -65,6 +65,10 @@ impl SimpleQueue {
             .is_empty()
             .context("Unable to read from queue messages")
     }
+    pub(super) fn has_message(&self, queue_name: &str, key: Bytes) -> Result<bool> {
+        let q_key = q_key(queue_name, key);
+        Ok(self.messages.get(q_key)?.is_some())
+    }
     pub(super) fn send_message(
         &self,
         queue_name: &str,

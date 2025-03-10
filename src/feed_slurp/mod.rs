@@ -1,12 +1,14 @@
 mod filters;
 
+use std::collections::BTreeMap;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use anyhow::{Context, Result};
 use feed_rs::model::Entry;
 use minijinja::{Environment, Template};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_cluster::RactorMessage;
 use raft::{LogEntryValue, RaftClientMsg, get_raft_local_client};
-use serde::Deserialize;
 use serde_json::json;
 use tracing::info;
 
@@ -15,6 +17,7 @@ use crate::activity_pub::delivery::DeliveryQueueItem;
 use crate::activity_pub::machine::{ActivityPubCommand, C2sCommand};
 use crate::activity_pub::model::{Create, Object};
 use crate::activity_pub::{ObjectKey, uuidgen};
+use crate::config::FeedSlurpConfig;
 
 use self::filters::{excerpt, to_text};
 
@@ -22,26 +25,18 @@ pub(crate) struct FeedSlurpWorker;
 
 pub(crate) struct FeedSlurpWorkerInit {
     pub(crate) apub: ActivityPubConfig,
+    pub(crate) feeds: BTreeMap<String, FeedSlurpConfig>,
 }
 
 pub(crate) struct FeedSlurpWorkerState {
     apub: ActivityPubConfig,
-}
-
-#[derive(Deserialize, Default)]
-#[serde(default)]
-pub(crate) struct IngestFeed {
-    pub(crate) uid: String,
-    pub(crate) base_url: String,
-    pub(crate) feed_url: String,
-    pub(crate) last: Option<usize>,
-    pub(crate) template: Option<String>,
-    pub(crate) dry_run: bool,
+    pub(crate) feeds: BTreeMap<String, FeedSlurpConfig>,
 }
 
 #[derive(RactorMessage)]
 pub(crate) enum FeedSlurpMsg {
-    IngestFeed(IngestFeed),
+    CheckFeed,
+    IngestFeed(FeedSlurpConfig),
 }
 
 impl Actor for FeedSlurpWorker {
@@ -54,16 +49,44 @@ impl Actor for FeedSlurpWorker {
         _myself: ActorRef<Self::Msg>,
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let FeedSlurpWorkerInit { apub } = args;
-        Ok(FeedSlurpWorkerState { apub })
+        let FeedSlurpWorkerInit { apub, feeds } = args;
+        Ok(FeedSlurpWorkerState { apub, feeds })
+    }
+    async fn post_start(
+        &self,
+        myself: ActorRef<Self::Msg>,
+        _state: &mut Self::State,
+    ) -> Result<(), ActorProcessingErr> {
+        info!("started");
+        const FEED_CHECK_INTERVAL: u64 = 60;
+        myself.send_interval(Duration::from_secs(FEED_CHECK_INTERVAL), || {
+            FeedSlurpMsg::CheckFeed
+        });
+        Ok(())
     }
     async fn handle(
         &self,
-        _myself: ActorRef<Self::Msg>,
+        myself: ActorRef<Self::Msg>,
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
+            FeedSlurpMsg::CheckFeed => {
+                info!("Checking feeds");
+                let client = get_raft_local_client()?;
+                let command = ActivityPubCommand::GetFeedSlurpLock(now());
+                let result = ractor::call!(
+                    client,
+                    RaftClientMsg::ClientRequest,
+                    LogEntryValue::from(command)
+                )?;
+                if result.is_ok() {
+                    info!("grabbed lock, checking feeds...");
+                    for feed in state.feeds.values().cloned() {
+                        ractor::cast!(myself, FeedSlurpMsg::IngestFeed(feed))?;
+                    }
+                }
+            }
             FeedSlurpMsg::IngestFeed(ingest_feed) => state
                 .handle_ingest_feed(&ingest_feed)
                 .await
@@ -73,16 +96,23 @@ impl Actor for FeedSlurpWorker {
     }
 }
 
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time must be after unix epoch")
+        .as_secs()
+}
+
 impl FeedSlurpWorkerState {
-    async fn handle_ingest_feed(&self, ingest_feed: &IngestFeed) -> Result<()> {
-        let IngestFeed {
+    async fn handle_ingest_feed(&self, config: &FeedSlurpConfig) -> Result<()> {
+        let FeedSlurpConfig {
             uid,
             base_url,
             feed_url,
-            last,
+            items,
             template,
             dry_run,
-        } = ingest_feed;
+        } = config;
         let response = reqwest::get(feed_url).await?;
         let feed_text = response.bytes().await?;
         let feed = {
@@ -97,7 +127,7 @@ impl FeedSlurpWorkerState {
         env.add_filter("to_text", to_text);
         env.add_filter("excerpt", excerpt);
         let jinja = env.template_from_str(template)?;
-        for entry in feed.entries.iter().take(last.unwrap_or(usize::MAX)).rev() {
+        for entry in feed.entries.iter().take(items.unwrap_or(usize::MAX)).rev() {
             let object = object_from_feed_entry(&self.apub.base_url, uid, entry, &jinja);
             let act_key = ObjectKey::new();
             let obj_key = ObjectKey::new();

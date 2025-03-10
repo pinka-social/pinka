@@ -17,6 +17,7 @@ pub(crate) struct Config {
     pub(crate) cluster: ClusterConfig,
     pub(crate) database: DatabaseConfig,
     pub(crate) activity_pub: ActivityPubConfig,
+    pub(crate) feeds: BTreeMap<String, FeedSlurpConfig>,
 }
 
 impl Config {
@@ -104,6 +105,22 @@ pub(crate) struct DatabaseConfig {
 pub(crate) struct ActivityPubConfig {
     pub(crate) base_url: String,
     pub(crate) webfinger_at_host: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct FeedSlurpConfig {
+    /// The user id to attribute to as author.
+    pub(crate) uid: String,
+    /// The feed URL. Feed can use RSS, Atom, or JSON format.
+    pub(crate) feed_url: String,
+    /// The base URL to resolve relative URLs in the feed.
+    pub(crate) base_url: String,
+    /// Only fetch the last N items from the feed if set.
+    pub(crate) items: Option<usize>,
+    /// Customize the minijinja template used to render the ingested item.
+    pub(crate) template: Option<String>,
+    /// Only logging the input/output without producing real activity.
+    pub(crate) dry_run: bool,
 }
 
 #[derive(Clone)]

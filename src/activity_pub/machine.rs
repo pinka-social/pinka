@@ -137,6 +137,8 @@ pub(crate) enum ActivityPubCommand {
         #[n(1)] Object<'static>,
         #[n(2)] Option<KeyMaterial>,
     ),
+    #[n(101)]
+    GetFeedSlurpLock(#[n(0)] u64),
 
     // ===== 200..256 client to server interactions =====
     /// Client to Server - Create Activity
@@ -271,6 +273,24 @@ impl State {
                 spawn_blocking(move || queue.delete_message(MAILBOX, key, receipt_handle))
                     .await
                     .context("Failed to handle AckDelivery command")??;
+            }
+            ActivityPubCommand::GetFeedSlurpLock(now) => {
+                let queue_name = "feed_slurp_lock";
+                let lock_key = [255u8; 16];
+                let queue = self.queue.clone();
+                return spawn_blocking(move || {
+                    if !queue.has_message(queue_name, lock_key)? {
+                        queue.send_message(queue_name, lock_key, [])?;
+                    }
+                    if queue
+                        .receive_message(queue_name, lock_key, now, 5 * 60)?
+                        .is_some()
+                    {
+                        return Ok(ClientResult::ok());
+                    }
+                    return Ok(ClientResult::err());
+                })
+                .await?;
             }
         }
 
