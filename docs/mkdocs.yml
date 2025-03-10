@@ -64,6 +64,7 @@ nav:
       - Storage design: developer/apub_storage_design.md
       - URL / IRI mapping: developer/apub_url_iri_mapping.md
       - Signing key management: developer/apub_key_management.md
+      - Scheduled feed ingestion: developer/apub_feed_schedule.md
   - Reference:
       - Configuration: reference/configuration.md
   - Blog: blog/index.md
