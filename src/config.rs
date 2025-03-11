@@ -120,7 +120,7 @@ pub(crate) struct FeedSlurpConfig {
     /// Customize the minijinja template used to render the ingested item.
     pub(crate) template: Option<String>,
     /// Only logging the input/output without producing real activity.
-    pub(crate) dry_run: bool,
+    pub(crate) dry_run: Option<bool>,
 }
 
 #[derive(Clone)]

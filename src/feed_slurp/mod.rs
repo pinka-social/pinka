@@ -139,7 +139,7 @@ impl FeedSlurpWorkerState {
             let create = Create::try_from(object)?
                 .ensure_id(format!("{}/as/objects/{act_key}", &self.apub.base_url))
                 .with_actor(format!("{}/users/{uid}", &self.apub.base_url));
-            if *dry_run {
+            if matches!(dry_run, Some(true)) {
                 info!(
                     "dry-run ingest entry {}",
                     serde_json::to_string_pretty(&create.to_value())?
