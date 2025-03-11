@@ -201,9 +201,10 @@ impl State {
                     .context("Failed to handle UpdateUser command")?;
             }
             ActivityPubCommand::C2sCreate(cmd) => {
-                self.handle_c2s_create(cmd)
+                return self
+                    .handle_c2s_create(cmd)
                     .await
-                    .context("Failed to handle C2sCreate command")?;
+                    .context("Failed to handle C2sCreate command");
             }
             ActivityPubCommand::C2sAccept(cmd) => {
                 self.handle_c2s_accept(cmd)
@@ -319,7 +320,7 @@ impl State {
         .await??;
         Ok(())
     }
-    async fn handle_c2s_create(&mut self, cmd: C2sCommand) -> Result<()> {
+    async fn handle_c2s_create(&mut self, cmd: C2sCommand) -> Result<ClientResult> {
         let C2sCommand {
             uid,
             act_key,
@@ -330,7 +331,7 @@ impl State {
             Ok(create) => create,
             Err(error) => {
                 error!(?error, "invalid object");
-                return Ok(());
+                return Ok(ClientResult::err());
             }
         };
         let base_url = self.apub.base_url.clone();
@@ -339,7 +340,7 @@ impl State {
         let obj_repo = self.obj_repo.clone();
         let outbox_index = self.outbox_index.clone();
 
-        spawn_blocking(move || -> Result<()> {
+        spawn_blocking(move || {
             let create: Object = create.into();
             if let Some(iri) = create.get_node_iri("object") {
                 if let Some(obj_key) = iri_index.find_one(iri)? {
@@ -349,7 +350,7 @@ impl State {
                         .context("Failed to load existing object")?;
                     let Some(update) = create.get_node_object("object") else {
                         error!("activity should have an object");
-                        return Ok(());
+                        return Ok(ClientResult::err());
                     };
                     if update
                         .get_str("updated")
@@ -359,7 +360,7 @@ impl State {
                             .or_else(|| object.get_str("published"))
                     {
                         info!("activity is not newer than the object, skipping");
-                        return Ok(());
+                        return Ok(ClientResult::err());
                     }
                     // FIXME where should we ensure id and actor?
                     let update = Update::try_from(update)?
@@ -375,11 +376,9 @@ impl State {
                     b.commit()?;
                 }
             }
-            Ok(())
+            Ok(ClientResult::ok())
         })
-        .await??;
-
-        Ok(())
+        .await?
     }
     async fn handle_c2s_accept(&mut self, cmd: C2sCommand) -> Result<()> {
         let C2sCommand {

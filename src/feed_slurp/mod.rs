@@ -152,24 +152,26 @@ impl FeedSlurpWorkerState {
                 obj_key,
                 object: create.into(),
             });
-            ractor::call!(
+            let result = ractor::call!(
                 client,
                 RaftClientMsg::ClientRequest,
                 LogEntryValue::from(command)
             )?;
-            let command = ActivityPubCommand::QueueDelivery(
-                uuidgen(),
-                DeliveryQueueItem {
-                    uid: uid.to_string(),
-                    act_key,
-                    retry_targets: None,
-                },
-            );
-            ractor::call!(
-                client,
-                RaftClientMsg::ClientRequest,
-                LogEntryValue::from(command)
-            )?;
+            if result.is_ok() {
+                let command = ActivityPubCommand::QueueDelivery(
+                    uuidgen(),
+                    DeliveryQueueItem {
+                        uid: uid.to_string(),
+                        act_key,
+                        retry_targets: None,
+                    },
+                );
+                ractor::call!(
+                    client,
+                    RaftClientMsg::ClientRequest,
+                    LogEntryValue::from(command)
+                )?;
+            }
         }
         Ok(())
     }
