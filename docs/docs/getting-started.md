@@ -1,8 +1,5 @@
 # Getting Started
 
-!!! warning
-    Under construction 🚧
-
 ## Installation
 
 For beginners, we recommend using our prebuilt containers available at
@@ -17,59 +14,55 @@ The simplest configuration only requires a few options:
 base_url = "https://social.example.org" # without trailing slash
 webfinger_at_host = "@social.example.org"
 
+[cluster.servers.single]
+
 [admin]
 # Use long, hard to guess password. This is used to protect
 # admin HTTP endpoints via basic auth.
 password = "<secure password>"
 
 [database]
-# Pinka needs to persist some states. This folder should be able
-# to survive reboots.
+# This folder should be able to survive reboots.
+# Use a persisted volume when using containers.
 path = "/var/lib/pinka"
 ```
 
-## Deployment
-
-### Directly run the command
-
-```bash
-pinka serve -c config.toml
-```
-
-### Directly run the container
+## Run
 
 ```bash
 podman run -v ./config.toml:/etc/pinka/config.toml:z \
            -v pinka:/var/lib/pinka \
+           -p 8080:8080 \
            quay.io/pinka/pinka serve -c /etc/pinka/config.toml
 ```
 
-### Docker compose
+## Create new user
 
-TBA
+Create a JSON file with the user profile:
 
-### Podman quadlet
-
-```ini
-[Unit]
-Description=Pinka Server
-Wants=network-online.target
-
-[Container]
-ContainerName=pinka
-Image=quay.io/pinka/pinka:latest
-AutoUpdate=registry
-NoNewPrivileges=true
-ReadOnly=true
-Tmpfs=/tmp
-Volume=pinka:/var/pinka
-Volume=/etc/pinka:/etc/pinka
-Exec=serve -c /etc/pinka/config.toml
-
-[Service]
-Restart=on-failure
-TimeoutStartSec=900
-
-[Install]
-WantedBy=default.target
+```json
+{
+    "type": "Person",
+    "id": "example",
+    "preferredUsername": "example",
+    "name": "User Example",
+    "summary": "This is a example actor, we can use any Actor properties",
+    "url": "https://social.example.org",
+    "discoverable": true,
+    "manuallyApprovesFollowers": false
+}
 ```
+
+Then post to the user profile to create this actor. We set `gen_rsa` to true to
+initialize the actor's HTTP signature cryptography. We only need to set it once.
+
+```bash
+curl -u pinka --json @user.json \
+    http://localhost:8080/users/example\?gen_rsa=true
+```
+
+Now you can use tools like <https://browser.pub/http://localhost:8080/users/example> to expolore the activities.
+
+Next check the user guide [Setup](./setup/index.md) and
+[Configuration](./setup/configuration.md) for detailed setup and configuration
+options.

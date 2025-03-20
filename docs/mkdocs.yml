@@ -50,10 +50,10 @@ nav:
   - Home: index.md
   - Getting started: getting-started.md
   - User guide:
-      - Installation: setup/installation.md
+      - Setup: setup/index.md
       - Configuration: setup/configuration.md
-      - Rendering: setup/render_comments_on_page.md
-      - Security: setup/security.md
+      - URL mapping: setup/url_mapping.md
+      - Website integration: setup/website_integration.md
       - High availability: setup/high-availability.md
       - Performance: setup/performance.md
       - Monitoring: setup/monitoring.md
@@ -62,7 +62,6 @@ nav:
       - Architecture: developer/architecture.md
       - Raft protocol: developer/raft_handle_client_request.md
       - Storage design: developer/apub_storage_design.md
-      - URL / IRI mapping: developer/apub_url_iri_mapping.md
       - Signing key management: developer/apub_key_management.md
       - Scheduled feed ingestion: developer/apub_feed_schedule.md
   - Reference:

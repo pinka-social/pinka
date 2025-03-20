@@ -89,7 +89,7 @@ impl Default for HttpConfig {
     fn default() -> Self {
         Self {
             listen: true,
-            address: "[::1]".to_string(),
+            address: "[::]".to_string(),
             port: 8080,
         }
     }
