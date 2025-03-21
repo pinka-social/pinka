@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [unreleased]
+## [0.1.0] - 2025-03-21
 
 ### 🚀 Features
 
@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 - (apub) Wrap ingested object in Create activity
 - (js) Show both author name and preferredName
 - (http) Always set Vary header with Accept
+- Automatically check feeds
 
 ### 🐛 Bug Fixes
 
@@ -27,10 +28,20 @@ All notable changes to this project will be documented in this file.
 ### 💼 Other
 
 - Enable lto
+- Switch container base to debian:stable-slim
+- (deps) Bump ring in /crates/pinka_raft/examples/simple-register
+- Try to use reqwest without ring
+- Use reqwest with webpki roots
 
 ### 🚜 Refactor
 
 - (config) Change server config to be indexed by name
+- (raft) Decouple raft from crate level config
+- (raft) Extract pinka_raft crate
+- (raft) Minimize direct dependency on tokio
+- Better error logging in delivery
+- Allow omitting dry_run
+- Avoid queueing unchanged object
 
 ### 📚 Documentation
 
@@ -40,6 +51,16 @@ All notable changes to this project will be documented in this file.
 - Rename blog post file to match slug
 - Fix blog and rss plugin integration
 - Update blog post
+- Update configuration reference
+- Add design for scheduled feed slurp
+- Update getting started instruction
+- Update public documents
+
+### 🧪 Testing
+
+- (raft) Implement a jepsen test
+- (raft) Improve jepsen test robustness
+- (raft) Upgrade jepsen to 0.3.8
 
 ### ⚙️ Miscellaneous Tasks
 
