@@ -67,11 +67,16 @@ For detailed documentation, please visit our website (🚧).
 
 ## 🛠️ Integration Example
 
+First, include the JavaScript file:
+
+```html
+<script src="https://example.com/pinka/comments.js"></script>
 ```
-<pinka-comments
-  site="your-site-url"
-  page-id="unique-page-id">
-</pinka-comments>
+
+Then specify where the comments will be added:
+
+```html
+<div class="pinka-comments"></div>
 ```
 
 ## 🤝 Contributing
