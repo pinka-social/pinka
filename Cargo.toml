@@ -14,7 +14,7 @@ members = ["crates/pinka_raft"]
 # common utility
 anyhow = "1.0"
 tracing = "0.1.41"
-tracing-subscriber = "0.3.19"
+tracing-subscriber = "0.3.20"
 # common serialization and persistence
 fd-lock = "4.0.2"
 fjall = "2.6.3"
