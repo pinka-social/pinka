@@ -72,7 +72,7 @@ impl Object<'_> {
         }
         None
     }
-    pub(crate) fn get_node_object(&self, prop: &str) -> Option<Object> {
+    pub(crate) fn get_node_object(&self, prop: &str) -> Option<Object<'_>> {
         if let Some(v) = self.0.get(prop) {
             if v.is_object() {
                 return Some(v.into());

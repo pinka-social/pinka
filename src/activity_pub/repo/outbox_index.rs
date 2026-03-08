@@ -90,7 +90,7 @@ impl OutboxIndex {
         after: Option<String>,
         first: Option<u64>,
         last: Option<u64>,
-    ) -> Result<Vec<(ObjectKey, Object)>> {
+    ) -> Result<Vec<(ObjectKey, Object<'_>)>> {
         let keys = self
             .outbox_index
             .find_all(uid, before, after, first, last)?;

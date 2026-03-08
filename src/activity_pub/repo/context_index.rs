@@ -66,7 +66,7 @@ impl ContextIndex {
         after: Option<String>,
         first: Option<u64>,
         last: Option<u64>,
-    ) -> Result<Vec<(ObjectKey, Object)>> {
+    ) -> Result<Vec<(ObjectKey, Object<'_>)>> {
         let keys = self.ctx_index.find_all(iri, before, after, first, last)?;
         let mut result = vec![];
         for key in keys {
