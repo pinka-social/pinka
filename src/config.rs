@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use fjall::Keyspace;
+use fjall::Database;
 use secrecy::SecretString;
 use serde::Deserialize;
 use uuid::Uuid;
@@ -128,7 +128,7 @@ pub(crate) struct RuntimeConfig {
     pub(crate) init: Config,
     pub(crate) server_name: String,
     pub(crate) server: ServerConfig,
-    pub(crate) keyspace: Keyspace,
+    pub(crate) database: Database,
 }
 
 impl Default for RaftConfig {

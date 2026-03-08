@@ -2,23 +2,23 @@ use std::ops::Bound;
 use std::str::FromStr;
 
 use anyhow::Result;
-use fjall::{Batch, PartitionHandle, UserKey};
+use fjall::{Keyspace, OwnedWriteBatch, UserKey};
 
 use super::{IdObjIndexKey, ObjectKey};
 
 #[derive(Clone)]
 pub(super) struct IdObjIndex {
-    index: PartitionHandle,
+    index: Keyspace,
 }
 
 impl IdObjIndex {
-    pub(super) fn new(index: PartitionHandle) -> IdObjIndex {
+    pub(super) fn new(index: Keyspace) -> IdObjIndex {
         IdObjIndex { index }
     }
-    pub(super) fn insert(&self, b: &mut Batch, id_obj_key: IdObjIndexKey) {
+    pub(super) fn insert(&self, b: &mut OwnedWriteBatch, id_obj_key: IdObjIndexKey) {
         b.insert(&self.index, id_obj_key, []);
     }
-    pub(super) fn remove(&self, b: &mut Batch, id_obj_key: IdObjIndexKey) {
+    pub(super) fn remove(&self, b: &mut OwnedWriteBatch, id_obj_key: IdObjIndexKey) {
         b.remove(&self.index, id_obj_key);
     }
     pub(super) fn count(&self, id: &str) -> u64 {
@@ -58,6 +58,7 @@ impl IdObjIndex {
         let iter = self
             .index
             .range((start, end))
+            .map(|item| item.into_inner())
             .flatten()
             .map(|(key, val)| (IdObjIndexKey::from(key.as_ref()), val))
             .filter(|(key, _)| key.id() == id);

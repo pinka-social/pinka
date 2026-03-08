@@ -48,11 +48,11 @@ impl Actor for DeliveryWorker {
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         let DeliveryWorkerInit { config } = args;
-        let keyspace = config.keyspace.clone();
+        let database = config.database.clone();
         spawn_blocking(move || {
-            let obj_repo = ObjectRepo::new(keyspace.clone())?;
-            let crypto_repo = CryptoRepo::new(keyspace.clone())?;
-            let queue = SimpleQueue::new(keyspace.clone())?;
+            let obj_repo = ObjectRepo::new(database.clone())?;
+            let crypto_repo = CryptoRepo::new(database.clone())?;
+            let queue = SimpleQueue::new(database.clone())?;
             let mailman = Mailman::new();
 
             Ok(DeliveryWorkerState {

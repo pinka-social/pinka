@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use fjall::{Keyspace, PersistMode};
+use fjall::{Database, PersistMode};
 use minicbor::{Decode, Encode};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use raft::{ClientResult, LogEntryValue, RaftAppliedMsg, StateMachineMsg, get_raft_applied};
@@ -19,7 +19,7 @@ pub(crate) struct ActivityPubMachine;
 
 pub(crate) struct State {
     apub: ActivityPubConfig,
-    keyspace: Keyspace,
+    database: Database,
     user_index: UserIndex,
     outbox_index: OutboxIndex,
     ctx_index: ContextIndex,
@@ -31,7 +31,7 @@ pub(crate) struct State {
 
 pub(crate) struct ActivityPubMachineInit {
     pub(crate) apub: ActivityPubConfig,
-    pub(crate) keyspace: Keyspace,
+    pub(crate) database: Database,
 }
 
 impl Actor for ActivityPubMachine {
@@ -44,18 +44,18 @@ impl Actor for ActivityPubMachine {
         _myself: ActorRef<Self::Msg>,
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let ActivityPubMachineInit { apub, keyspace } = args;
+        let ActivityPubMachineInit { apub, database } = args;
         spawn_blocking(move || {
-            let user_index = UserIndex::new(keyspace.clone())?;
-            let outbox_index = OutboxIndex::new(keyspace.clone())?;
-            let ctx_index = ContextIndex::new(keyspace.clone())?;
-            let iri_index = IriIndex::new(keyspace.clone())?;
-            let obj_repo = ObjectRepo::new(keyspace.clone())?;
-            let crypto_repo = CryptoRepo::new(keyspace.clone())?;
-            let queue = SimpleQueue::new(keyspace.clone())?;
+            let user_index = UserIndex::new(database.clone())?;
+            let outbox_index = OutboxIndex::new(database.clone())?;
+            let ctx_index = ContextIndex::new(database.clone())?;
+            let iri_index = IriIndex::new(database.clone())?;
+            let obj_repo = ObjectRepo::new(database.clone())?;
+            let crypto_repo = CryptoRepo::new(database.clone())?;
+            let queue = SimpleQueue::new(database.clone())?;
             Ok(State {
                 apub,
-                keyspace,
+                database,
                 user_index,
                 outbox_index,
                 ctx_index,
@@ -304,7 +304,7 @@ impl State {
         key_material: Option<KeyMaterial>,
     ) -> Result<()> {
         let user = AsActor::from(object);
-        let keyspace = self.keyspace.clone();
+        let keyspace = self.database.clone();
         let user_index = self.user_index.clone();
         let crypto_repo = self.crypto_repo.clone();
 
@@ -335,7 +335,7 @@ impl State {
             }
         };
         let base_url = self.apub.base_url.clone();
-        let keyspace = self.keyspace.clone();
+        let keyspace = self.database.clone();
         let iri_index = self.iri_index.clone();
         let obj_repo = self.obj_repo.clone();
         let outbox_index = self.outbox_index.clone();
@@ -387,7 +387,7 @@ impl State {
             obj_key: _,
             object,
         } = cmd;
-        let mut batch = self.keyspace.batch().durability(Some(PersistMode::SyncAll));
+        let mut batch = self.database.batch().durability(Some(PersistMode::SyncAll));
         let obj_repo = self.obj_repo.clone();
         spawn_blocking(move || -> Result<()> {
             obj_repo.insert(&mut batch, act_key, object)?;
@@ -419,7 +419,7 @@ impl State {
         }
 
         let object = object.into_owned();
-        let keyspace = self.keyspace.clone();
+        let keyspace = self.database.clone();
         let obj_repo = self.obj_repo.clone();
         let ctx_index = self.ctx_index.clone();
 
@@ -449,7 +449,7 @@ impl State {
                 return Ok(());
             };
             let iri = iri.to_string();
-            let keyspace = self.keyspace.clone();
+            let keyspace = self.database.clone();
             let iri_index = self.iri_index.clone();
             let obj_repo = self.obj_repo.clone();
             let ctx_index = self.ctx_index.clone();
@@ -480,7 +480,7 @@ impl State {
         } = cmd;
         if object.has_props(&["object"]) {
             // TODO verify object is the actor IRI
-            let keyspace = self.keyspace.clone();
+            let keyspace = self.database.clone();
             let iri_index = self.iri_index.clone();
             let obj_repo = self.obj_repo.clone();
             let user_index = self.user_index.clone();
@@ -508,7 +508,7 @@ impl State {
         let S2sCommand {
             uid, object: undo, ..
         } = cmd;
-        let keyspace = self.keyspace.clone();
+        let keyspace = self.database.clone();
         let iri_index = self.iri_index.clone();
         let obj_repo = self.obj_repo.clone();
         let ctx_index = self.ctx_index.clone();
@@ -587,7 +587,7 @@ impl State {
                 return Ok(());
             };
             let iri = iri.to_string();
-            let keyspace = self.keyspace.clone();
+            let keyspace = self.database.clone();
             let obj_repo = self.obj_repo.clone();
             let ctx_index = self.ctx_index.clone();
 

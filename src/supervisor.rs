@@ -1,8 +1,6 @@
-use std::thread;
 use std::time::Duration;
 
 use anyhow::Result;
-use fjall::GarbageCollection;
 use ractor::{Actor, ActorProcessingErr, ActorRef, SupervisionEvent};
 use ractor_cluster::RactorMessage;
 use raft::{RaftConfig, RaftServer, RaftServerMsg, StateMachineMsg};
@@ -50,14 +48,13 @@ impl Actor for Supervisor {
     async fn post_start(
         &self,
         myself: ActorRef<Self::Msg>,
-        state: &mut Self::State,
+        _state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         info!("started");
 
         myself.send_interval(Duration::from_secs(24 * 60 * 60), || {
             SupervisorMsg::KeyspaceMaint
         });
-        state.gc_keyspace();
 
         Ok(())
     }
@@ -66,10 +63,9 @@ impl Actor for Supervisor {
         &self,
         _myself: ActorRef<Self::Msg>,
         _message: Self::Msg,
-        state: &mut Self::State,
+        _state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         // TODO move to module scope
-        state.gc_keyspace();
         Ok(())
     }
 
@@ -133,24 +129,6 @@ impl Actor for Supervisor {
 }
 
 impl SupervisorState {
-    fn gc_keyspace(&self) {
-        let keyspace = self.config.keyspace.clone();
-        info!("garbage collect blobs in the keyspace...");
-        thread::spawn(move || {
-            let raft_log = keyspace
-                .open_partition("raft_log", Default::default())
-                .expect("failed to open raft_log partition");
-            raft_log
-                .gc_with_staleness_threshold(0.5)
-                .expect("failed to garbage collect raft_log");
-            let objects = keyspace
-                .open_partition("objects", Default::default())
-                .expect("failed to open objects partition");
-            objects
-                .gc_with_staleness_threshold(0.5)
-                .expect("failed to garbage collect objects");
-        });
-    }
     async fn spawn_cluster_maint(&self) -> Result<()> {
         Actor::spawn_linked(
             Some("cluster_maint".into()),
@@ -200,7 +178,7 @@ impl SupervisorState {
         Actor::spawn_linked(
             None,
             RaftServer,
-            (config, self.config.keyspace.clone()),
+            (config, self.config.database.clone()),
             self.myself.get_cell(),
         )
         .await?;
@@ -212,7 +190,7 @@ impl SupervisorState {
             ActivityPubMachine,
             ActivityPubMachineInit {
                 apub: self.config.init.activity_pub.clone(),
-                keyspace: self.config.keyspace.clone(),
+                database: self.config.database.clone(),
             },
             self.myself.get_cell(),
         )

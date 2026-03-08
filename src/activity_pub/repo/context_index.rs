@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use fjall::{Batch, Keyspace};
+use fjall::{Database, OwnedWriteBatch};
 
 use crate::activity_pub::model::Object;
 
@@ -15,21 +15,20 @@ pub(crate) struct ContextIndex {
 }
 
 impl ContextIndex {
-    pub(crate) fn new(keyspace: Keyspace) -> Result<ContextIndex> {
+    pub(crate) fn new(database: Database) -> Result<ContextIndex> {
         fn open_indexes(
-            keyspace: Keyspace,
+            database: Database,
         ) -> Result<(IdObjIndex, IdObjIndex, IdObjIndex, ObjectRepo)> {
-            let ctx_index =
-                IdObjIndex::new(keyspace.open_partition("ctx_index", Default::default())?);
+            let ctx_index = IdObjIndex::new(database.keyspace("ctx_index", || Default::default())?);
             let likes_index =
-                IdObjIndex::new(keyspace.open_partition("likes_index", Default::default())?);
+                IdObjIndex::new(database.keyspace("likes_index", || Default::default())?);
             let shares_index =
-                IdObjIndex::new(keyspace.open_partition("shares_index", Default::default())?);
-            let object_repo = ObjectRepo::new(keyspace.clone())?;
+                IdObjIndex::new(database.keyspace("shares_index", || Default::default())?);
+            let object_repo = ObjectRepo::new(database.clone())?;
             Ok((ctx_index, likes_index, shares_index, object_repo))
         }
         let (ctx_index, likes_index, shares_index, object_repo) =
-            open_indexes(keyspace).context("Failed to open indexes")?;
+            open_indexes(database).context("Failed to open indexes")?;
         Ok(ContextIndex {
             ctx_index,
             likes_index,
@@ -37,16 +36,16 @@ impl ContextIndex {
             object_repo,
         })
     }
-    pub(crate) fn insert(&self, b: &mut Batch, iri: &str, obj_key: ObjectKey) {
+    pub(crate) fn insert(&self, b: &mut OwnedWriteBatch, iri: &str, obj_key: ObjectKey) {
         self.ctx_index.insert(b, IdObjIndexKey::new(iri, obj_key));
     }
-    pub(crate) fn insert_likes(&self, b: &mut Batch, iri: &str, obj_key: ObjectKey) {
+    pub(crate) fn insert_likes(&self, b: &mut OwnedWriteBatch, iri: &str, obj_key: ObjectKey) {
         self.likes_index.insert(b, IdObjIndexKey::new(iri, obj_key));
     }
-    pub(crate) fn remove_likes(&self, b: &mut Batch, iri: &str, obj_key: ObjectKey) {
+    pub(crate) fn remove_likes(&self, b: &mut OwnedWriteBatch, iri: &str, obj_key: ObjectKey) {
         self.likes_index.remove(b, IdObjIndexKey::new(iri, obj_key));
     }
-    pub(crate) fn insert_shares(&self, b: &mut Batch, iri: &str, obj_key: ObjectKey) {
+    pub(crate) fn insert_shares(&self, b: &mut OwnedWriteBatch, iri: &str, obj_key: ObjectKey) {
         self.shares_index
             .insert(b, IdObjIndexKey::new(iri, obj_key));
     }

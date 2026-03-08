@@ -1,21 +1,21 @@
 use anyhow::{Context, Result};
-use fjall::{Batch, Keyspace, PartitionCreateOptions, PartitionHandle};
+use fjall::{Database, Keyspace, KeyspaceCreateOptions, OwnedWriteBatch};
 use minicbor::{Decode, Encode};
 use secrecy::{ExposeSecret, SecretSlice};
 
 #[derive(Clone)]
 pub(crate) struct CryptoRepo {
-    key_pairs: PartitionHandle,
+    key_pairs: Keyspace,
 }
 
 impl CryptoRepo {
-    pub(crate) fn new(keyspace: Keyspace) -> Result<CryptoRepo> {
-        let key_pairs = keyspace
-            .open_partition("key_pairs", PartitionCreateOptions::default())
+    pub(crate) fn new(database: Database) -> Result<CryptoRepo> {
+        let key_pairs = database
+            .keyspace("key_pairs", || KeyspaceCreateOptions::default())
             .context("Failed top open crypto repo")?;
         Ok(CryptoRepo { key_pairs })
     }
-    pub(crate) fn insert(&self, b: &mut Batch, uid: &str, key_pair: &KeyMaterial) {
+    pub(crate) fn insert(&self, b: &mut OwnedWriteBatch, uid: &str, key_pair: &KeyMaterial) {
         b.insert(&self.key_pairs, uid, key_pair.expose_secret());
     }
     pub(crate) fn find_one(&self, uid: &str) -> Result<Option<KeyMaterial>> {

@@ -75,7 +75,7 @@ async fn main() -> Result<()> {
         }
     };
 
-    let keyspace = fjall::Config::new(keyspace_name)
+    let database = fjall::Database::builder(&keyspace_name)
         .manual_journal_persist(true)
         .open()
         .context("Failed to open database")?;
@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
         init: config,
         server_name,
         server,
-        keyspace,
+        database,
     };
 
     match flags.subcommand {

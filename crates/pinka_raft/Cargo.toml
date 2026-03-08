@@ -12,7 +12,7 @@ resolver = "3"
 anyhow = "1.0"
 tracing = "0.1.41"
 # common serialization and persistence
-fjall = "2.6.3"
+fjall = "3.1.0"
 minicbor = { version = "0.26.0", features = ["derive", "alloc"] }
 # async runtime
 tokio = { version = "1.44", features = ["time"] }

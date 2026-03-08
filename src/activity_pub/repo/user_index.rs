@@ -1,5 +1,5 @@
 use anyhow::Result;
-use fjall::{Batch, Keyspace, PartitionCreateOptions, PartitionHandle};
+use fjall::{Database, Keyspace, OwnedWriteBatch};
 
 use crate::activity_pub::model::{Actor, Object};
 
@@ -9,35 +9,33 @@ use super::{IdObjIndexKey, ObjectKey, ObjectRepo};
 #[derive(Clone)]
 pub(crate) struct UserIndex {
     object_repo: ObjectRepo,
-    user_index: PartitionHandle,
+    user_index: Keyspace,
     follower_index: IdObjIndex,
 }
 
 impl UserIndex {
-    pub(crate) fn new(keyspace: Keyspace) -> Result<UserIndex> {
-        let object_repo = ObjectRepo::new(keyspace.clone())?;
-        let user_index =
-            keyspace.open_partition("user_index", PartitionCreateOptions::default())?;
-        let follower_index = IdObjIndex::new(
-            keyspace.open_partition("follower_index", PartitionCreateOptions::default())?,
-        );
+    pub(crate) fn new(database: Database) -> Result<UserIndex> {
+        let object_repo = ObjectRepo::new(database.clone())?;
+        let user_index = database.keyspace("user_index", || Default::default())?;
+        let follower_index =
+            IdObjIndex::new(database.keyspace("follower_index", || Default::default())?);
         Ok(UserIndex {
             object_repo,
             user_index,
             follower_index,
         })
     }
-    pub(crate) fn insert(&self, b: &mut Batch, uid: &str, user: Actor) -> Result<()> {
+    pub(crate) fn insert(&self, b: &mut OwnedWriteBatch, uid: &str, user: Actor) -> Result<()> {
         // FIXME
         let obj_key = ObjectKey::new();
         self.object_repo.insert(b, obj_key, user)?;
         b.insert(&self.user_index, uid, obj_key);
         Ok(())
     }
-    pub(crate) fn insert_follower(&self, b: &mut Batch, uid: &str, key: ObjectKey) {
+    pub(crate) fn insert_follower(&self, b: &mut OwnedWriteBatch, uid: &str, key: ObjectKey) {
         self.follower_index.insert(b, IdObjIndexKey::new(uid, key))
     }
-    pub(crate) fn remove_follower(&self, b: &mut Batch, uid: &str, key: ObjectKey) {
+    pub(crate) fn remove_follower(&self, b: &mut OwnedWriteBatch, uid: &str, key: ObjectKey) {
         self.follower_index.remove(b, IdObjIndexKey::new(uid, key))
     }
     pub(crate) fn find_one(&self, uid: &str) -> Result<Option<Object<'_>>> {
@@ -78,7 +76,7 @@ impl UserIndex {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use fjall::{Config, Keyspace};
+    use fjall::Database;
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -89,9 +87,9 @@ mod tests {
     #[test]
     fn insert_then_find() -> Result<()> {
         let tmp_dir = tempdir()?;
-        let keyspace = Keyspace::open(Config::new(tmp_dir.path()).temporary(true))?;
-        let mut b = keyspace.batch();
-        let repo = UserIndex::new(keyspace)?;
+        let database = Database::builder(tmp_dir.path()).temporary(true).open()?;
+        let mut b = database.batch();
+        let repo = UserIndex::new(database)?;
         let obj = Object::try_from(json!(
             {
                 "@context": ["https://www.w3.org/ns/activitystreams",

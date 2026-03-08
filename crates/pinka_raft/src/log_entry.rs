@@ -3,7 +3,7 @@ use std::ops::RangeBounds;
 
 use anyhow::{Context, Error, Result};
 use blocking::unblock;
-use fjall::{Batch, PartitionHandle};
+use fjall::{Keyspace, OwnedWriteBatch};
 use minicbor::{Decode, Encode};
 
 use super::rpc::RaftSerDe;
@@ -45,15 +45,15 @@ impl RaftSerDe for LogEntry {}
 
 #[derive(Clone)]
 pub(super) struct RaftLog {
-    log: PartitionHandle,
+    log: Keyspace,
 }
 
 impl RaftLog {
-    pub(super) fn new(log: PartitionHandle) -> RaftLog {
+    pub(super) fn new(log: Keyspace) -> RaftLog {
         RaftLog { log }
     }
 
-    pub(super) async fn insert(&self, mut b: Batch, entry: LogEntry) -> Result<()> {
+    pub(super) async fn insert(&self, mut b: OwnedWriteBatch, entry: LogEntry) -> Result<()> {
         let log = self.log.clone();
         unblock(move || {
             let key = entry.index.to_be_bytes();
@@ -65,7 +65,11 @@ impl RaftLog {
         .context("Failed to insert log entry")
     }
 
-    pub(super) async fn insert_all(&self, mut b: Batch, entries: Vec<LogEntry>) -> Result<()> {
+    pub(super) async fn insert_all(
+        &self,
+        mut b: OwnedWriteBatch,
+        entries: Vec<LogEntry>,
+    ) -> Result<()> {
         let log = self.log.clone();
         unblock(move || {
             for entry in entries {
@@ -82,7 +86,9 @@ impl RaftLog {
     pub(super) async fn get_last_log_entry(&self) -> Result<Option<LogEntry>> {
         let log = self.log.clone();
         unblock(move || {
-            log.last_key_value()?
+            log.last_key_value()
+                .map(|item| item.into_inner().ok())
+                .flatten()
                 .map(|(_, value)| {
                     LogEntry::from_bytes(&value).context("Failed to deserialize log entry")
                 })
@@ -118,6 +124,7 @@ impl RaftLog {
         );
         unblock(move || {
             log.range(range)
+                .map(|item| item.into_inner())
                 .map(|r| {
                     r.map_err(Error::new).and_then(|(_, slice)| {
                         LogEntry::from_bytes(&slice).context("failed to deserialize log entry")
@@ -131,7 +138,7 @@ impl RaftLog {
 
     pub(super) async fn remove_last_log_entry(
         &mut self,
-        mut b: Batch,
+        mut b: OwnedWriteBatch,
         last_log_index: u64,
     ) -> Result<()> {
         let log = self.log.clone();

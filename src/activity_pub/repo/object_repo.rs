@@ -1,5 +1,5 @@
 use anyhow::Result;
-use fjall::{Batch, Keyspace, KvSeparationOptions, PartitionCreateOptions, PartitionHandle};
+use fjall::{Database, Keyspace, KeyspaceCreateOptions, KvSeparationOptions, OwnedWriteBatch};
 use serde_json::Value;
 
 use crate::activity_pub::model::Object;
@@ -9,20 +9,20 @@ use super::ObjectKey;
 
 #[derive(Clone)]
 pub(crate) struct ObjectRepo {
-    objects: PartitionHandle,
+    objects: Keyspace,
 }
 
 impl ObjectRepo {
-    pub(crate) fn new(keyspace: Keyspace) -> Result<ObjectRepo> {
-        let objects = keyspace.open_partition(
-            "objects",
-            PartitionCreateOptions::default().with_kv_separation(KvSeparationOptions::default()),
-        )?;
+    pub(crate) fn new(database: Database) -> Result<ObjectRepo> {
+        let objects = database.keyspace("objects", || {
+            KeyspaceCreateOptions::default()
+                .with_kv_separation(Some(KvSeparationOptions::default()))
+        })?;
         Ok(ObjectRepo { objects })
     }
     pub(crate) fn insert(
         &self,
-        b: &mut Batch,
+        b: &mut OwnedWriteBatch,
         key: ObjectKey,
         object: impl Into<Value>,
     ) -> Result<()> {
@@ -42,7 +42,7 @@ impl ObjectRepo {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use fjall::{Config, Keyspace};
+    use fjall::Database;
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -51,8 +51,8 @@ mod tests {
     #[test]
     fn insert_then_find() -> Result<()> {
         let tmp_dir = tempdir()?;
-        let keyspace = Keyspace::open(Config::new(tmp_dir.path()).temporary(true))?;
-        let repo = ObjectRepo::new(keyspace.clone())?;
+        let database = Database::builder(tmp_dir.path()).temporary(true).open()?;
+        let repo = ObjectRepo::new(database.clone())?;
         let object = Object::try_from(json!({
             "@context": "https://www.w3.org/ns/activitystreams",
             "type": "Note",
@@ -62,7 +62,7 @@ mod tests {
             "cc": ["https://example.com/~erik/followers",
                 "https://www.w3.org/ns/activitystreams#Public"]
         }))?;
-        let mut b = keyspace.batch();
+        let mut b = database.batch();
         let obj_key = ObjectKey::new();
         repo.insert(&mut b, obj_key, object.clone())?;
         b.commit()?;

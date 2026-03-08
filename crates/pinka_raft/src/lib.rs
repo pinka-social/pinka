@@ -23,7 +23,7 @@ pub use self::state_machine::{RaftAppliedMsg, StateMachineMsg, get_raft_applied}
 
 use anyhow::{Context, Error, Result};
 use blocking::unblock;
-use fjall::{Keyspace, KvSeparationOptions, PartitionCreateOptions, PartitionHandle, PersistMode};
+use fjall::{Database, Keyspace, KeyspaceCreateOptions, KvSeparationOptions, PersistMode};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, SupervisionEvent, pg};
 use ractor_cluster::{RactorClusterMessage, RactorMessage};
 use rand::Rng;
@@ -36,8 +36,8 @@ pub enum RaftServerMsg {}
 
 impl Actor for RaftServer {
     type Msg = RaftServerMsg;
-    type State = (RaftConfig, Keyspace);
-    type Arguments = (RaftConfig, Keyspace);
+    type State = (RaftConfig, Database);
+    type Arguments = (RaftConfig, Database);
 
     async fn pre_start(
         &self,
@@ -145,10 +145,10 @@ struct RaftState {
     config: RaftConfig,
 
     /// Storage for Raft log and state
-    keyspace: Keyspace,
+    database: Database,
 
     /// State restore partition
-    restore: PartitionHandle,
+    restore: Keyspace,
 
     /// Latest term this worker has seen (initialized to 0 on first boot,
     /// increases monotonically).
@@ -235,33 +235,31 @@ impl RaftWorker {
 impl Actor for RaftWorker {
     type Msg = RaftMsg;
     type State = RaftState;
-    type Arguments = (RaftConfig, Keyspace);
+    type Arguments = (RaftConfig, Database);
 
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let (config, keyspace) = args;
+        let (config, database) = args;
 
-        let ks = keyspace.clone();
+        let db = database.clone();
         let log = unblock(move || {
-            ks.open_partition(
-                "raft_log",
-                PartitionCreateOptions::default()
-                    .with_kv_separation(KvSeparationOptions::default()),
-            )
+            db.keyspace("raft_log", || {
+                KeyspaceCreateOptions::default()
+                    .with_kv_separation(Some(KvSeparationOptions::default()))
+            })
         })
         .await
         .context("Failed to open raft_log")?;
 
-        let ks = keyspace.clone();
-        let restore =
-            unblock(move || ks.open_partition("raft_restore", PartitionCreateOptions::default()))
-                .await
-                .context("Failed to open raft_restore state")?;
+        let db = database.clone();
+        let restore = unblock(move || db.keyspace("raft_restore", || Default::default()))
+            .await
+            .context("Failed to open raft_restore state")?;
 
-        let mut state = RaftState::new(myself, config, keyspace, log, restore);
+        let mut state = RaftState::new(myself, config, database, log, restore);
         state
             .restore_state()
             .await
@@ -427,14 +425,14 @@ impl RaftState {
     fn new(
         myself: ActorRef<RaftMsg>,
         config: RaftConfig,
-        keyspace: Keyspace,
-        log: PartitionHandle,
-        restore: PartitionHandle,
+        database: Database,
+        log: Keyspace,
+        restore: Keyspace,
     ) -> RaftState {
         Self {
             myself,
             config,
-            keyspace,
+            database,
             restore,
             current_term: 1,
             role: RaftRole::Follower,
@@ -505,7 +503,7 @@ impl RaftState {
             voted_for: self.voted_for.clone(),
             last_applied: self.last_applied,
         };
-        let mut batch = self.keyspace.batch().durability(Some(PersistMode::SyncAll));
+        let mut batch = self.database.batch().durability(Some(PersistMode::SyncAll));
         let restore = self.restore.clone();
         unblock(move || {
             saved.to_bytes().and_then(|value| {
@@ -861,7 +859,7 @@ impl RaftState {
             && self.log.get_log_entry(index).await?.term != request.entries[0].term
         {
             // conflict: remove 1 entry
-            let batch = self.keyspace.batch().durability(Some(PersistMode::SyncAll));
+            let batch = self.database.batch().durability(Some(PersistMode::SyncAll));
             self.log
                 .remove_last_log_entry(batch, self.last_log_index)
                 .await?;
@@ -1082,7 +1080,7 @@ impl RaftState {
             term: self.current_term,
             value,
         };
-        let batch = self.keyspace.batch().durability(Some(PersistMode::SyncAll));
+        let batch = self.database.batch().durability(Some(PersistMode::SyncAll));
         self.log.insert(batch, new_log_entry).await?;
         self.last_log_index = index;
         self.last_log_term = self.current_term;
@@ -1107,7 +1105,7 @@ impl RaftState {
         else {
             return Ok(());
         };
-        let batch = self.keyspace.batch().durability(Some(PersistMode::SyncAll));
+        let batch = self.database.batch().durability(Some(PersistMode::SyncAll));
         self.log.insert_all(batch, entries).await?;
         self.last_log_index = last_log_index;
         self.last_log_term = last_log_term;

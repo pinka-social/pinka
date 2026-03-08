@@ -160,7 +160,7 @@ async fn get_object_by_iri(
         return Err(StatusCode::METHOD_NOT_ALLOWED);
     }
     spawn_blocking(move || {
-        let iri_index = IriIndex::new(config.keyspace.clone()).map_err(ise)?;
+        let iri_index = IriIndex::new(config.database.clone()).map_err(ise)?;
         let iri = format!("{}{}", config.init.activity_pub.base_url, uri.path());
         let obj_key = iri_index
             .find_one(&iri)
@@ -186,8 +186,8 @@ fn blocking_get_object(
     obj_key: ObjectKey,
     json_ld_context: &[JsonLdContext],
 ) -> Result<ActivityStreamsJson<Value>, StatusCode> {
-    let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
-    let obj_repo = ObjectRepo::new(config.keyspace.clone()).map_err(ise)?;
+    let ctx_index = ContextIndex::new(config.database.clone()).map_err(ise)?;
+    let obj_repo = ObjectRepo::new(config.database.clone()).map_err(ise)?;
     info!(%obj_key, "loading object");
     if let Some(object) = obj_repo.find_one(obj_key).map_err(ise)? {
         if let Some(iri) = object.id() {
@@ -237,7 +237,7 @@ async fn get_object_likes_shares(
         return Err(StatusCode::NOT_FOUND);
     }
     spawn_blocking(move || {
-        let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
+        let ctx_index = ContextIndex::new(config.database.clone()).map_err(ise)?;
         let obj_key = ObjectKey::from_str(&obj_key)
             .context("invalid UUID")
             .map_err(invalid)?;
@@ -270,7 +270,7 @@ async fn get_object_replies(
             .context("invalid UUID")
             .map_err(invalid)?;
         let iri = format!("{}/as/objects/{obj_key}", config.init.activity_pub.base_url);
-        let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
+        let ctx_index = ContextIndex::new(config.database.clone()).map_err(ise)?;
         if params.has_page() {
             let query = params.to_query();
             let PageParams { before, after, .. } = params;
@@ -418,7 +418,7 @@ async fn get_webfinger(
         let Some(uid) = subject.strip_suffix(&config.init.activity_pub.webfinger_at_host) else {
             return Err(StatusCode::BAD_REQUEST);
         };
-        let user_index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
+        let user_index = UserIndex::new(config.database.clone()).map_err(ise)?;
         if user_index.find_one(uid).map_err(ise)?.is_some() {
             let jrd = json!({
                 "subject": subject,
@@ -451,8 +451,8 @@ async fn get_actor(
 ) -> Result<ActivityStreamsJson<Value>, StatusCode> {
     info!(%uid, "handle get actor request");
     spawn_blocking(move || {
-        let user_index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
-        let crypto_repo = CryptoRepo::new(config.keyspace.clone()).map_err(ise)?;
+        let user_index = UserIndex::new(config.database.clone()).map_err(ise)?;
+        let crypto_repo = CryptoRepo::new(config.database.clone()).map_err(ise)?;
         if let Some(object) = user_index.find_one(&uid).map_err(ise)? {
             let context = Value::Array(vec![
                 JsonLdContext::ActivityStreams.to_json(),
@@ -536,8 +536,8 @@ async fn get_outbox(
 ) -> Result<ActivityStreamsJson<Value>, StatusCode> {
     info!(%uid, "handle get outbox request");
     spawn_blocking(move || {
-        let index = OutboxIndex::new(config.keyspace.clone()).map_err(ise)?;
-        let ctx_index = ContextIndex::new(config.keyspace.clone()).map_err(ise)?;
+        let index = OutboxIndex::new(config.database.clone()).map_err(ise)?;
+        let ctx_index = ContextIndex::new(config.database.clone()).map_err(ise)?;
         if params.has_page() {
             let query = params.to_query();
             let PageParams { before, after, .. } = params;
@@ -816,7 +816,7 @@ async fn get_followers(
 ) -> Result<ActivityStreamsJson<Value>, StatusCode> {
     info!(%uid, "handle get followers request");
     spawn_blocking(move || {
-        let index = UserIndex::new(config.keyspace.clone()).map_err(ise)?;
+        let index = UserIndex::new(config.database.clone()).map_err(ise)?;
         // TODO generic collections handling
         if params.has_page() {
             let query = params.to_query();

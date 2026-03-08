@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use fjall::{Batch, Keyspace, PartitionCreateOptions};
+use fjall::{Database, OwnedWriteBatch};
 
 use crate::activity_pub::model::Object;
 
@@ -15,12 +15,11 @@ pub(crate) struct OutboxIndex {
 }
 
 impl OutboxIndex {
-    pub(crate) fn new(keyspace: Keyspace) -> Result<OutboxIndex> {
-        let object_repo = ObjectRepo::new(keyspace.clone())?;
-        let iri_index = IriIndex::new(keyspace.clone())?;
-        let outbox_index = IdObjIndex::new(
-            keyspace.open_partition("outbox_index", PartitionCreateOptions::default())?,
-        );
+    pub(crate) fn new(database: Database) -> Result<OutboxIndex> {
+        let object_repo = ObjectRepo::new(database.clone())?;
+        let iri_index = IriIndex::new(database.clone())?;
+        let outbox_index =
+            IdObjIndex::new(database.keyspace("outbox_index", || Default::default())?);
         Ok(OutboxIndex {
             object_repo,
             iri_index,
@@ -29,7 +28,7 @@ impl OutboxIndex {
     }
     pub(crate) fn insert_create(
         &self,
-        b: &mut Batch,
+        b: &mut OwnedWriteBatch,
         uid: String,
         act_key: ObjectKey,
         obj_key: ObjectKey,
@@ -52,7 +51,7 @@ impl OutboxIndex {
 
     pub(crate) fn insert_update(
         &self,
-        b: &mut Batch,
+        b: &mut OwnedWriteBatch,
         uid: String,
         act_key: ObjectKey,
         act: Object,

@@ -3,7 +3,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use fjall::{Keyspace, Partition, PersistMode, UserKey};
+use fjall::{Database, Keyspace, PersistMode, UserKey};
 use minicbor::{Decode, Encode};
 use tracing::debug;
 
@@ -38,17 +38,17 @@ impl ReceiveResult {
 
 #[derive(Clone)]
 pub(super) struct SimpleQueue {
-    keyspace: Keyspace,
-    messages: Partition,
-    visibility: Partition,
+    database: Database,
+    messages: Keyspace,
+    visibility: Keyspace,
 }
 
 impl SimpleQueue {
-    pub(super) fn new(keyspace: Keyspace) -> Result<SimpleQueue> {
-        let messages = keyspace.open_partition("sq_messages", Default::default())?;
-        let visibility = keyspace.open_partition("sq_visibility", Default::default())?;
+    pub(super) fn new(database: Database) -> Result<SimpleQueue> {
+        let messages = database.keyspace("sq_messages", || Default::default())?;
+        let visibility = database.keyspace("sq_visibility", || Default::default())?;
         Ok(SimpleQueue {
-            keyspace,
+            database,
             messages,
             visibility,
         })
@@ -88,7 +88,7 @@ impl SimpleQueue {
         let q_key = q_key(queue_name, key);
         let bytes = minicbor::to_vec(message)?;
 
-        let mut batch = self.keyspace.batch().durability(Some(PersistMode::SyncAll));
+        let mut batch = self.database.batch().durability(Some(PersistMode::SyncAll));
         batch.insert(&self.messages, q_key, bytes);
         batch.commit()?;
 
@@ -106,7 +106,7 @@ impl SimpleQueue {
         visibility_timeout: u64,
     ) -> Result<Option<ReceiveResult>> {
         for item in self.messages.prefix(queue_name) {
-            let (key, value_bytes) = item?;
+            let (key, value_bytes) = item.into_inner()?;
 
             // Check visibility
             if let Some(visible_at) = self.visibility.get(&key)? {
@@ -120,7 +120,7 @@ impl SimpleQueue {
             let new_visible_at = now + visibility_timeout;
 
             // Update in atomic batch
-            let mut batch = self.keyspace.batch().durability(Some(PersistMode::SyncAll));
+            let mut batch = self.database.batch().durability(Some(PersistMode::SyncAll));
             batch.insert(&self.visibility, key.clone(), new_visible_at.to_le_bytes());
 
             message.receipt_handle = new_receipt_handle;
@@ -151,7 +151,7 @@ impl SimpleQueue {
         receipt_handle: Bytes,
     ) -> Result<bool> {
         let q_key = q_key(queue_name, key);
-        let mut batch = self.keyspace.batch().durability(Some(PersistMode::SyncAll));
+        let mut batch = self.database.batch().durability(Some(PersistMode::SyncAll));
 
         if let Some(message) = self.messages.get(&q_key)? {
             let message: QueueMessage = minicbor::decode(&message)?;
@@ -193,7 +193,9 @@ mod tests {
     #[test]
     fn test_basic_flow() -> Result<()> {
         let dir = tempdir()?;
-        let keyspace = fjall::Config::new(dir.path()).temporary(true).open()?;
+        let keyspace = fjall::Database::builder(dir.path())
+            .temporary(true)
+            .open()?;
         let queue = SimpleQueue::new(keyspace)?;
 
         // Test empty queue
@@ -228,7 +230,9 @@ mod tests {
     #[test]
     fn test_visibility_timeout() -> Result<()> {
         let dir = tempdir()?;
-        let keyspace = fjall::Config::new(dir.path()).temporary(true).open()?;
+        let keyspace = fjall::Database::builder(dir.path())
+            .temporary(true)
+            .open()?;
         let queue = SimpleQueue::new(keyspace)?;
 
         queue.send_message(QUEUE_NAME, uuidgen(), b"test2")?;
@@ -263,7 +267,9 @@ mod tests {
     #[test]
     fn test_handle_rotation() -> Result<()> {
         let dir = tempdir()?;
-        let keyspace = fjall::Config::new(dir.path()).temporary(true).open()?;
+        let keyspace = fjall::Database::builder(dir.path())
+            .temporary(true)
+            .open()?;
         let queue = SimpleQueue::new(keyspace)?;
 
         queue.send_message(QUEUE_NAME, uuidgen(), b"test3")?;
@@ -291,7 +297,9 @@ mod tests {
     #[test]
     fn test_concurrent_access() -> Result<()> {
         let dir = tempdir()?;
-        let keyspace = fjall::Config::new(dir.path()).temporary(true).open()?;
+        let keyspace = fjall::Database::builder(dir.path())
+            .temporary(true)
+            .open()?;
         let queue = SimpleQueue::new(keyspace)?;
 
         let mut handles = vec![];
@@ -332,7 +340,9 @@ mod tests {
     #[test]
     fn test_concurrent_multi_queue() -> Result<()> {
         let dir = tempdir()?;
-        let keyspace = fjall::Config::new(dir.path()).temporary(true).open()?;
+        let keyspace = fjall::Database::builder(dir.path())
+            .temporary(true)
+            .open()?;
         let queue = SimpleQueue::new(keyspace)?;
 
         let mut handles = vec![];
