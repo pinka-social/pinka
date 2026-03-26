@@ -6,12 +6,11 @@ mod flags;
 mod http;
 mod supervisor;
 
-use std::fs::{self, File};
+use std::fs;
 use std::path::Path;
 use std::process::exit;
 
 use anyhow::{Context, Result, bail};
-use fd_lock::RwLock;
 use ractor::Actor;
 use tokio::signal::unix::{SignalKind, signal};
 use tracing::{error, info};
@@ -57,23 +56,6 @@ async fn main() -> Result<()> {
     if !keyspace_name.exists() {
         create_keyspace_folder(&keyspace_name).context("Failed to create database folder")?;
     }
-    let lock_file =
-        File::create(keyspace_name.join("lock")).context("Failed to create lock file")?;
-    let mut keyspace_lock = RwLock::new(lock_file);
-    let write_guard = match keyspace_lock.try_write() {
-        Ok(guard) => guard,
-        Err(_) => {
-            eprintln!(
-                "Database '{}' cannot be accessed because it is locked by another process.",
-                keyspace_name.display()
-            );
-            eprintln!(
-                "If you are certain no other process is using this database, delete '{}' to remove the lock file.",
-                keyspace_name.join("lock").display()
-            );
-            exit(1);
-        }
-    };
 
     let database = fjall::Database::builder(&keyspace_name)
         .manual_journal_persist(true)
@@ -90,8 +72,6 @@ async fn main() -> Result<()> {
     match flags.subcommand {
         PinkaCmd::Serve(_) => serve(config).await?,
     }
-
-    drop(write_guard);
 
     Ok(())
 }
