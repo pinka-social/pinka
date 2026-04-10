@@ -134,3 +134,5 @@ template = '''
 `base_url`: The URL used to resolve relative URLs in the feed.
 
 `template`: The template used to format the activity content.
+
+`dry_run`: Ingested feed will not be saved if set to true.
