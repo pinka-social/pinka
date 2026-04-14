@@ -20,5 +20,5 @@ tokio = { version = "1.44", features = ["time"] }
 ractor = { version = "0.15.1", features = ["cluster"] }
 ractor_cluster = { version = "0.15.1" }
 # raft
-rand = "0.9.0"
+rand = "0.9.3"
 blocking = { version = "1.6.1", features = ["tracing"] }
